@@ -53,6 +53,14 @@
 - 2026-04-15 开始整理 GitHub / 免费公网部署所需结构，补充 `.gitignore`、`streamlit_app.py` 与 README 的公网部署说明
 - 2026-04-15 确认本地仓库已连接 `origin https://github.com/younglou/be_rich.git`，同时发现当前机器未登录 `gh`
 - 2026-04-15 通过 GitHub 连接器确认用户账户 `nanfengovo` 已安装 GitHub App，但当前工具链仍缺少“直接创建仓库 / 直接 fork 到子目录”的能力
+- 2026-04-15 用户确认希望把桌面端的可配置能力继续搬到浏览器版，因此开始检查 `vibecoding/be_rich` 中实际部署的 Streamlit 入口与通知模块
+- 2026-04-15 确认 `client_app.py` 当前仍只有公共行情看板，而 `notifications.py` 已具备通知配置持久化、代理、测试发送与配置摘要能力
+- 2026-04-15 更新 `design.md`，补充“公共监控面板 + 管理员配置工作区”的网页端设计，以及 `admin_passcode` 保护策略与免费公网持久化风险说明
+- 2026-04-15 更新 `client_app.py`，在浏览器版新增“通知与代理工作区”，并把通知、代理、测试发送直接接到现有 `NotificationService`
+- 2026-04-15 为网页端增加 `admin_passcode` 读取逻辑，优先支持 Streamlit secrets，其次支持 `COPPER_PULSE_ADMIN_PASSCODE` 环境变量
+- 2026-04-15 浏览器版配置区采用“公共行情 + 管理员配置工作区”分层布局，未解锁时仅保留概要信息，不展示 SMTP / webhook / 代理密码等敏感字段
+- 2026-04-15 更新 `.gitignore` 与 `.streamlit/secrets.example.toml`，补充网页端口令保护所需的示例配置
+- 2026-04-15 更新 `README.md`，补充 Streamlit Cloud 上的管理员口令配置说明，以及浏览器版通知配置能力的使用方式
 
 # Files Changed
 
@@ -61,6 +69,8 @@
 - `desktop_app.py`
 - `desktop-requirements.txt`
 - `client_app.py`
+- `.gitignore`
+- `.streamlit/secrets.example.toml`
 - `.streamlit/config.toml`
 - `.devcontainer/devcontainer.json`
 - `docker-compose.yml`
@@ -105,3 +115,5 @@
 - 使用项目 `.desktop-build-venv` 通过 `NotificationService.save_config(...)` 将代理配置持久化到用户本机 `~/Library/Application Support/Copper Pulse/notification_config.json`
 - 使用项目 `.desktop-build-venv` 再次对持久化后的代理配置执行真实 `_send_email`，确认错误文案已包含 `当前已启用 HTTP 127.0.0.1:7890`
 - 使用 `QT_QPA_PLATFORM=offscreen` 初始化 `CopperPulseWindow`，确认桌面端代理表单已正确加载 `custom / http / 127.0.0.1 / 7890`
+- 使用 `env PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile client_app.py notifications.py market_data.py streamlit_app.py` 校验网页端新增配置工作区后的 Python 语法
+- 使用项目 `.desktop-build-venv/bin/python` 在隔离 `HOME` 下执行 `NotificationService.save_config(...)`，确认浏览器表单会提交的原始字符串可被正确归一化为 SMTP 收件人列表、Gmail 无空格密码、企业微信提醒账号与手机号列表

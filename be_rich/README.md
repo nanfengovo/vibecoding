@@ -69,6 +69,18 @@ docker compose up --build
 - 浏览器版入口仍然使用 `be_rich/streamlit_app.py`
 - 桌面版源码与打包脚本保留在 `be_rich/` 目录下
 
+如果你准备在公网启用网页端配置工作区，建议同时在 Streamlit Cloud 的 Secrets 中加入：
+
+```toml
+admin_passcode = "replace-with-your-own-passcode"
+```
+
+对应示例文件也放在仓库里：
+
+- `.streamlit/secrets.example.toml`
+
+配置后，网页端的“通知与代理工作区”会自动变成口令保护模式；未输入口令时，页面仍可查看行情，但不会展示 SMTP、Webhook 和代理密码等敏感字段。
+
 ## 容器内开发
 
 如果你使用 VS Code / Cursor Dev Container：
@@ -100,6 +112,7 @@ streamlit run client_app.py --server.address=0.0.0.0 --server.port=8501
 - 桌面版和 CLI 共用同一套通知服务
 - 首次运行后会自动生成配置文件：
   `~/Library/Application Support/Copper Pulse/notification_config.json`
+- 浏览器版现在也能直接编辑同一套通知配置，并支持“保存配置 / 从文件重载 / 保存并发送测试”
 - 桌面版右侧现在可以直接配置通知表单，不需要手改 JSON
 - 支持在桌面端配置统一代理，Gmail SMTP、企业微信和飞书会共用同一套代理出口
 - 代理支持两种来源：
@@ -112,6 +125,7 @@ streamlit run client_app.py --server.address=0.0.0.0 --server.port=8501
 - 默认只会对“低估 / 正常估值 / 高估”三种明确状态发通知
 - 同一状态默认有 240 分钟冷却时间，避免自动刷新时重复刷屏
 - 桌面版支持“保存配置 / 重载表单 / 发送测试 / 打开配置文件”
+- 若浏览器版部署在免费公网环境，本地文件持久化在平台重启后可能失效；建议把管理员口令放进 Secrets，并把网页端配置视作“可在线调整”的运行时设置
 
 ## 终端模式
 
