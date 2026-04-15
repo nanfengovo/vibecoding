@@ -1,0 +1,22 @@
+services:
+  copper-client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      PYTHONUNBUFFERED: "1"
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/workspace
+      - /etc/localtime:/etc/localtime:ro
+    command:
+      - streamlit
+      - run
+      - client_app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
