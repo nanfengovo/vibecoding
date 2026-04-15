@@ -670,6 +670,7 @@ def render_admin_settings(snapshot, notification_service: NotificationService, c
             max_value=24 * 60,
             value=int(config.get("cooldown_minutes") or 240),
             step=5,
+            key="admin_cooldown_minutes",
         )
         notify_on_states = state_col.multiselect(
             "触发区间",
@@ -677,17 +678,23 @@ def render_admin_settings(snapshot, notification_service: NotificationService, c
             default=config.get("notify_on_states", []),
             format_func=lambda item: STATE_LABELS.get(item, item),
             help="默认只在低估 / 正常估值 / 高估三种明确状态发通知。",
+            key="admin_notify_on_states",
         )
 
         st.markdown("#### 代理出口")
         proxy_toggle_col, proxy_note_col = st.columns([0.7, 1.3], gap="large")
-        proxy_enabled = proxy_toggle_col.toggle("启用代理", value=bool(proxy_config.get("enabled")))
+        proxy_enabled = proxy_toggle_col.toggle(
+            "启用代理",
+            value=bool(proxy_config.get("enabled")),
+            key="admin_proxy_enabled",
+        )
         proxy_mode = proxy_note_col.radio(
             "代理来源",
             options=list(PROXY_MODE_LABELS.keys()),
             index=0 if str(proxy_config.get("mode")) == "system" else 1,
             format_func=lambda item: PROXY_MODE_LABELS[item],
             horizontal=True,
+            key="admin_proxy_mode",
         )
         proxy_type = st.radio(
             "代理类型",
@@ -695,21 +702,32 @@ def render_admin_settings(snapshot, notification_service: NotificationService, c
             index=0 if str(proxy_config.get("proxy_type")) != "socks5" else 1,
             format_func=lambda item: PROXY_TYPE_LABELS[item],
             horizontal=True,
+            key="admin_proxy_type",
         )
         proxy_host_col, proxy_port_col, proxy_user_col, proxy_password_col = st.columns(4, gap="medium")
-        proxy_host = proxy_host_col.text_input("主机", value=str(proxy_config.get("host") or "127.0.0.1"))
+        proxy_host = proxy_host_col.text_input(
+            "主机",
+            value=str(proxy_config.get("host") or "127.0.0.1"),
+            key="admin_proxy_host",
+        )
         proxy_port = proxy_port_col.number_input(
             "端口",
             min_value=1,
             max_value=65535,
             value=int(proxy_config.get("port") or 7890),
             step=1,
+            key="admin_proxy_port",
         )
-        proxy_username = proxy_user_col.text_input("用户名", value=str(proxy_config.get("username") or ""))
+        proxy_username = proxy_user_col.text_input(
+            "用户名",
+            value=str(proxy_config.get("username") or ""),
+            key="admin_proxy_username",
+        )
         proxy_password = proxy_password_col.text_input(
             "密码",
             value=str(proxy_config.get("password") or ""),
             type="password",
+            key="admin_proxy_password",
         )
         st.caption(
             "选择“系统代理”时，发送动作会优先读取当前运行环境暴露的代理设置；"
@@ -718,69 +736,114 @@ def render_admin_settings(snapshot, notification_service: NotificationService, c
 
         st.markdown("#### 邮件")
         email_toggle_col, email_security_col = st.columns([0.7, 1.3], gap="large")
-        smtp_enabled = email_toggle_col.toggle("启用邮件通知", value=bool(smtp_config.get("enabled")))
+        smtp_enabled = email_toggle_col.toggle(
+            "启用邮件通知",
+            value=bool(smtp_config.get("enabled")),
+            key="admin_smtp_enabled",
+        )
         smtp_security_mode = email_security_col.selectbox(
             "安全方式",
             options=list(SMTP_SECURITY_LABELS.keys()),
             index=list(SMTP_SECURITY_LABELS.keys()).index(smtp_security_mode_from_config(smtp_config)),
             format_func=lambda item: SMTP_SECURITY_LABELS[item],
+            key="admin_smtp_security_mode",
         )
         smtp_host_col, smtp_port_col = st.columns([1.4, 0.6], gap="medium")
-        smtp_host = smtp_host_col.text_input("SMTP 主机", value=str(smtp_config.get("host") or ""))
+        smtp_host = smtp_host_col.text_input(
+            "SMTP 主机",
+            value=str(smtp_config.get("host") or ""),
+            key="admin_smtp_host",
+        )
         smtp_port = smtp_port_col.number_input(
             "端口",
             min_value=1,
             max_value=65535,
             value=int(smtp_config.get("port") or 465),
             step=1,
+            key="admin_smtp_port",
         )
         smtp_user_col, smtp_password_col = st.columns(2, gap="medium")
-        smtp_username = smtp_user_col.text_input("用户名", value=str(smtp_config.get("username") or ""))
+        smtp_username = smtp_user_col.text_input(
+            "用户名",
+            value=str(smtp_config.get("username") or ""),
+            key="admin_smtp_username",
+        )
         smtp_password = smtp_password_col.text_input(
             "密码 / App Password",
             value=str(smtp_config.get("password") or ""),
             type="password",
+            key="admin_smtp_password",
         )
-        smtp_sender = st.text_input("发件人", value=str(smtp_config.get("sender") or ""))
+        smtp_sender = st.text_input(
+            "发件人",
+            value=str(smtp_config.get("sender") or ""),
+            key="admin_smtp_sender",
+        )
         smtp_receivers = st.text_area(
             "收件人",
             value=join_lines(list(smtp_config.get("receivers", []))),
             help="每行一个邮箱，也支持逗号分隔；保存时会自动归一化。",
             height=110,
+            key="admin_smtp_receivers",
         )
 
         channel_col_1, channel_col_2 = st.columns(2, gap="large")
         with channel_col_1:
             st.markdown("#### 企业微信")
-            wecom_enabled = st.toggle("启用企业微信", value=bool(wecom_config.get("enabled")))
-            wecom_webhook = st.text_input("Webhook", value=str(wecom_config.get("webhook_url") or ""))
+            wecom_enabled = st.toggle(
+                "启用企业微信",
+                value=bool(wecom_config.get("enabled")),
+                key="admin_wecom_enabled",
+            )
+            wecom_webhook = st.text_input(
+                "Webhook",
+                value=str(wecom_config.get("webhook_url") or ""),
+                key="admin_wecom_webhook",
+            )
             wecom_mentions = st.text_area(
                 "提醒账号",
                 value=join_lines(list(wecom_config.get("mentioned_list", []))),
                 help="每行一个账号，或直接输入 @all。",
                 height=96,
+                key="admin_wecom_mentions",
             )
             wecom_mobiles = st.text_area(
                 "提醒手机号",
                 value=join_lines(list(wecom_config.get("mentioned_mobile_list", []))),
                 help="每行一个手机号。",
                 height=96,
+                key="admin_wecom_mobiles",
             )
 
         with channel_col_2:
             st.markdown("#### 飞书")
-            feishu_enabled = st.toggle("启用飞书", value=bool(feishu_config.get("enabled")))
-            feishu_webhook = st.text_input("Webhook", value=str(feishu_config.get("webhook_url") or ""))
+            feishu_enabled = st.toggle(
+                "启用飞书",
+                value=bool(feishu_config.get("enabled")),
+                key="admin_feishu_enabled",
+            )
+            feishu_webhook = st.text_input(
+                "Webhook",
+                value=str(feishu_config.get("webhook_url") or ""),
+                key="admin_feishu_webhook",
+            )
             st.caption("飞书机器人只需要 webhook 即可；测试消息会直接发送到对应群。")
 
         action_col_1, action_col_2 = st.columns(2, gap="medium")
-        save_clicked = action_col_1.form_submit_button("保存配置", type="primary", use_container_width=True)
-        save_test_clicked = action_col_2.form_submit_button("保存并发送测试", use_container_width=True)
+        save_clicked = action_col_1.form_submit_button(
+            "保存配置",
+            type="primary",
+            use_container_width=True,
+        )
+        save_test_clicked = action_col_2.form_submit_button(
+            "保存并发送测试",
+            use_container_width=True,
+        )
 
     reload_col, lock_col = st.columns([1, 1], gap="medium")
-    if reload_col.button("从文件重载当前配置", use_container_width=True):
+    if reload_col.button("从文件重载当前配置", use_container_width=True, key="admin_reload_config"):
         st.rerun()
-    if lock_col.button("锁定配置工作区", use_container_width=True):
+    if lock_col.button("锁定配置工作区", use_container_width=True, key="admin_lock_workspace"):
         st.session_state["copper_pulse_admin_unlocked"] = False
         st.rerun()
 
@@ -871,7 +934,12 @@ def render_admin_workspace(snapshot) -> None:
 
     if passcode_configured and not unlocked:
         with st.form("web-admin-unlock-form", clear_on_submit=True):
-            unlock_value = st.text_input("管理员口令", type="password", placeholder="输入管理员口令后再编辑配置")
+            unlock_value = st.text_input(
+                "管理员口令",
+                type="password",
+                placeholder="输入管理员口令后再编辑配置",
+                key="admin_unlock_passcode",
+            )
             unlock_clicked = st.form_submit_button("解锁配置工作区", use_container_width=True)
 
         if unlock_clicked:

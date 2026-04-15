@@ -61,6 +61,8 @@
 - 2026-04-15 浏览器版配置区采用“公共行情 + 管理员配置工作区”分层布局，未解锁时仅保留概要信息，不展示 SMTP / webhook / 代理密码等敏感字段
 - 2026-04-15 更新 `.gitignore` 与 `.streamlit/secrets.example.toml`，补充网页端口令保护所需的示例配置
 - 2026-04-15 更新 `README.md`，补充 Streamlit Cloud 上的管理员口令配置说明，以及浏览器版通知配置能力的使用方式
+- 2026-04-15 根据 Streamlit Community Cloud 的报错反馈，修复浏览器版管理表单的重复控件 ID 问题，为 `用户名 / 密码 / Webhook / 端口` 等同名控件补充显式 `key`
+- 2026-04-15 同步为解锁表单与工作区按钮补充稳定 `key`，避免云端在重跑时再次触发 `StreamlitDuplicateElementId`
 
 # Files Changed
 
@@ -117,3 +119,4 @@
 - 使用 `QT_QPA_PLATFORM=offscreen` 初始化 `CopperPulseWindow`，确认桌面端代理表单已正确加载 `custom / http / 127.0.0.1 / 7890`
 - 使用 `env PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile client_app.py notifications.py market_data.py streamlit_app.py` 校验网页端新增配置工作区后的 Python 语法
 - 使用项目 `.desktop-build-venv/bin/python` 在隔离 `HOME` 下执行 `NotificationService.save_config(...)`，确认浏览器表单会提交的原始字符串可被正确归一化为 SMTP 收件人列表、Gmail 无空格密码、企业微信提醒账号与手机号列表
+- 使用 `env PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile client_app.py streamlit_app.py` 复核重复控件 ID 修复后的网页端语法
