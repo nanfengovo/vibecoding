@@ -63,6 +63,12 @@
 - 2026-04-15 更新 `README.md`，补充 Streamlit Cloud 上的管理员口令配置说明，以及浏览器版通知配置能力的使用方式
 - 2026-04-15 根据 Streamlit Community Cloud 的报错反馈，修复浏览器版管理表单的重复控件 ID 问题，为 `用户名 / 密码 / Webhook / 端口` 等同名控件补充显式 `key`
 - 2026-04-15 同步为解锁表单与工作区按钮补充稳定 `key`，避免云端在重跑时再次触发 `StreamlitDuplicateElementId`
+- 2026-04-15 根据新的网页端体验反馈，继续重构 `client_app.py`：将监控配置从 sidebar 挪到主工作区顶部，不再依赖默认的左上角折叠入口
+- 2026-04-15 为浏览器版新增短周期行情缓存与手动刷新 nonce，降低“同步最新行情中...”在表单交互时的重复等待
+- 2026-04-15 通知工作区改为顶层标签页中的独立页面，并在解锁配置时自动暂停 auto refresh，避免编辑长表单时被页面重跑打断
+- 2026-04-15 通知配置内部改成二级标签页结构，同时把保存 / 测试 / 重载 / 锁定按钮改为纵向操作流，减少桌面端冲突和移动端挤压
+- 2026-04-15 为保存配置与测试发送动作补充 spinner 和 toast，让按钮点击后有明确反馈
+- 2026-04-15 更新 `README.md`，同步新的“主工作区控制栏 + 标签页”网页结构说明
 
 # Files Changed
 
@@ -120,3 +126,4 @@
 - 使用 `env PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile client_app.py notifications.py market_data.py streamlit_app.py` 校验网页端新增配置工作区后的 Python 语法
 - 使用项目 `.desktop-build-venv/bin/python` 在隔离 `HOME` 下执行 `NotificationService.save_config(...)`，确认浏览器表单会提交的原始字符串可被正确归一化为 SMTP 收件人列表、Gmail 无空格密码、企业微信提醒账号与手机号列表
 - 使用 `env PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile client_app.py streamlit_app.py` 复核重复控件 ID 修复后的网页端语法
+- 使用 `env PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile client_app.py streamlit_app.py notifications.py market_data.py` 校验缓存加速、主工作区控制栏和标签页重构后的网页端语法

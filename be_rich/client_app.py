@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 from html import escape
 
 import pandas as pd
@@ -27,7 +28,7 @@ from notifications import NOTIFY_STATE_ORDER, NotificationService
 st.set_page_config(
     page_title="Copper Pulse",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 STATE_LABELS = {
@@ -369,6 +370,39 @@ def inject_styles() -> None:
             line-height: 1.7;
         }
 
+        .control-shell {
+            margin-top: 1.2rem;
+            padding: 1.15rem 1.15rem 0.9rem 1.15rem;
+            border-radius: 24px;
+            background: rgba(255, 255, 255, 0.66);
+            border: 1px solid rgba(16, 33, 45, 0.08);
+            box-shadow: 0 10px 30px rgba(16, 33, 45, 0.05);
+        }
+
+        .control-title {
+            margin: 0 0 0.35rem 0;
+            font-size: 1.1rem;
+            font-weight: 800;
+            color: #10212d;
+        }
+
+        .control-copy {
+            margin: 0 0 0.9rem 0;
+            color: rgba(16, 33, 45, 0.66);
+            line-height: 1.6;
+        }
+
+        .inline-status {
+            margin: 0.75rem 0 0 0;
+            font-size: 0.9rem;
+            color: rgba(16, 33, 45, 0.72);
+        }
+
+        .workspace-panel {
+            margin-top: 0.85rem;
+            padding: 0.35rem 0 0.2rem 0;
+        }
+
         @media (max-width: 900px) {
             .hero-grid,
             .hero-strip {
@@ -377,6 +411,17 @@ def inject_styles() -> None:
 
             .hero-shell {
                 padding: 1.25rem;
+            }
+
+            .block-container {
+                padding-top: 0.8rem;
+                padding-left: 0.9rem;
+                padding-right: 0.9rem;
+            }
+
+            .workspace-shell,
+            .control-shell {
+                padding: 1rem;
             }
         }
         </style>
@@ -553,6 +598,13 @@ def render_section_heading(title: str, body: str) -> None:
     st.markdown(f"<p class='section-copy'>{body}</p>", unsafe_allow_html=True)
 
 
+@st.cache_data(show_spinner=False)
+def load_dashboard_snapshot(period: str, interval: str, refresh_nonce: int, cache_bucket: int):
+    del refresh_nonce
+    del cache_bucket
+    return MarketDataService().fetch_dashboard(period=period, interval=interval)
+
+
 def read_admin_passcode() -> str:
     try:
         from_secrets = str(st.secrets[ADMIN_PASSCODE_SECRET_KEY]).strip()
@@ -580,6 +632,28 @@ def smtp_security_flags(mode: str) -> tuple[bool, bool]:
 
 def join_lines(values: list[str]) -> str:
     return "\n".join(str(value).strip() for value in values if str(value).strip())
+
+
+def render_control_panel(*, auto_refresh: bool, refresh_interval: int, chart_label: str, auto_refresh_paused: bool) -> None:
+    st.markdown(
+        """
+        <section class="control-shell">
+            <h3 class="control-title">监控控制台</h3>
+            <p class="control-copy">
+                把刷新策略和图表窗口移动到主工作区，避免依赖浏览器左上角的默认侧栏入口；
+                在桌面端与移动端都能更稳定地操作。
+            </p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    control_col_1, control_col_2 = st.columns(2, gap="large")
+    with control_col_1:
+        st.metric("刷新模式", "自动刷新" if auto_refresh else "手动刷新", f"{refresh_interval} 秒")
+    with control_col_2:
+        status_text = "编辑通知配置时已自动暂停" if auto_refresh_paused else "与当前页面保持同步"
+        st.metric("图表窗口", chart_label, status_text)
 
 
 def render_workspace_banner(config: dict[str, Any], notification_service: NotificationService, *, unlocked: bool) -> None:
@@ -662,134 +736,130 @@ def render_admin_settings(snapshot, notification_service: NotificationService, c
     feishu_config = config.get("feishu", {})
 
     with st.form("notification-admin-form", clear_on_submit=False):
-        st.markdown("#### 发送策略")
-        strategy_col, state_col = st.columns([0.8, 1.2], gap="large")
-        cooldown_minutes = strategy_col.number_input(
-            "冷却时间（分钟）",
-            min_value=5,
-            max_value=24 * 60,
-            value=int(config.get("cooldown_minutes") or 240),
-            step=5,
-            key="admin_cooldown_minutes",
-        )
-        notify_on_states = state_col.multiselect(
-            "触发区间",
-            options=NOTIFY_STATE_ORDER,
-            default=config.get("notify_on_states", []),
-            format_func=lambda item: STATE_LABELS.get(item, item),
-            help="默认只在低估 / 正常估值 / 高估三种明确状态发通知。",
-            key="admin_notify_on_states",
+        strategy_tab, proxy_tab, smtp_tab, wecom_tab, feishu_tab = st.tabs(
+            ["发送策略", "代理", "邮件", "企业微信", "飞书"]
         )
 
-        st.markdown("#### 代理出口")
-        proxy_toggle_col, proxy_note_col = st.columns([0.7, 1.3], gap="large")
-        proxy_enabled = proxy_toggle_col.toggle(
-            "启用代理",
-            value=bool(proxy_config.get("enabled")),
-            key="admin_proxy_enabled",
-        )
-        proxy_mode = proxy_note_col.radio(
-            "代理来源",
-            options=list(PROXY_MODE_LABELS.keys()),
-            index=0 if str(proxy_config.get("mode")) == "system" else 1,
-            format_func=lambda item: PROXY_MODE_LABELS[item],
-            horizontal=True,
-            key="admin_proxy_mode",
-        )
-        proxy_type = st.radio(
-            "代理类型",
-            options=list(PROXY_TYPE_LABELS.keys()),
-            index=0 if str(proxy_config.get("proxy_type")) != "socks5" else 1,
-            format_func=lambda item: PROXY_TYPE_LABELS[item],
-            horizontal=True,
-            key="admin_proxy_type",
-        )
-        proxy_host_col, proxy_port_col, proxy_user_col, proxy_password_col = st.columns(4, gap="medium")
-        proxy_host = proxy_host_col.text_input(
-            "主机",
-            value=str(proxy_config.get("host") or "127.0.0.1"),
-            key="admin_proxy_host",
-        )
-        proxy_port = proxy_port_col.number_input(
-            "端口",
-            min_value=1,
-            max_value=65535,
-            value=int(proxy_config.get("port") or 7890),
-            step=1,
-            key="admin_proxy_port",
-        )
-        proxy_username = proxy_user_col.text_input(
-            "用户名",
-            value=str(proxy_config.get("username") or ""),
-            key="admin_proxy_username",
-        )
-        proxy_password = proxy_password_col.text_input(
-            "密码",
-            value=str(proxy_config.get("password") or ""),
-            type="password",
-            key="admin_proxy_password",
-        )
-        st.caption(
-            "选择“系统代理”时，发送动作会优先读取当前运行环境暴露的代理设置；"
-            "如果你已经明确知道本地端口，公网部署通常更适合直接填写自定义代理。"
-        )
+        with strategy_tab:
+            cooldown_minutes = st.number_input(
+                "冷却时间（分钟）",
+                min_value=5,
+                max_value=24 * 60,
+                value=int(config.get("cooldown_minutes") or 240),
+                step=5,
+                key="admin_cooldown_minutes",
+            )
+            notify_on_states = st.multiselect(
+                "触发区间",
+                options=NOTIFY_STATE_ORDER,
+                default=config.get("notify_on_states", []),
+                format_func=lambda item: STATE_LABELS.get(item, item),
+                help="默认只在低估 / 正常估值 / 高估三种明确状态发通知。",
+                key="admin_notify_on_states",
+            )
 
-        st.markdown("#### 邮件")
-        email_toggle_col, email_security_col = st.columns([0.7, 1.3], gap="large")
-        smtp_enabled = email_toggle_col.toggle(
-            "启用邮件通知",
-            value=bool(smtp_config.get("enabled")),
-            key="admin_smtp_enabled",
-        )
-        smtp_security_mode = email_security_col.selectbox(
-            "安全方式",
-            options=list(SMTP_SECURITY_LABELS.keys()),
-            index=list(SMTP_SECURITY_LABELS.keys()).index(smtp_security_mode_from_config(smtp_config)),
-            format_func=lambda item: SMTP_SECURITY_LABELS[item],
-            key="admin_smtp_security_mode",
-        )
-        smtp_host_col, smtp_port_col = st.columns([1.4, 0.6], gap="medium")
-        smtp_host = smtp_host_col.text_input(
-            "SMTP 主机",
-            value=str(smtp_config.get("host") or ""),
-            key="admin_smtp_host",
-        )
-        smtp_port = smtp_port_col.number_input(
-            "端口",
-            min_value=1,
-            max_value=65535,
-            value=int(smtp_config.get("port") or 465),
-            step=1,
-            key="admin_smtp_port",
-        )
-        smtp_user_col, smtp_password_col = st.columns(2, gap="medium")
-        smtp_username = smtp_user_col.text_input(
-            "用户名",
-            value=str(smtp_config.get("username") or ""),
-            key="admin_smtp_username",
-        )
-        smtp_password = smtp_password_col.text_input(
-            "密码 / App Password",
-            value=str(smtp_config.get("password") or ""),
-            type="password",
-            key="admin_smtp_password",
-        )
-        smtp_sender = st.text_input(
-            "发件人",
-            value=str(smtp_config.get("sender") or ""),
-            key="admin_smtp_sender",
-        )
-        smtp_receivers = st.text_area(
-            "收件人",
-            value=join_lines(list(smtp_config.get("receivers", []))),
-            help="每行一个邮箱，也支持逗号分隔；保存时会自动归一化。",
-            height=110,
-            key="admin_smtp_receivers",
-        )
+        with proxy_tab:
+            proxy_enabled = st.toggle(
+                "启用代理",
+                value=bool(proxy_config.get("enabled")),
+                key="admin_proxy_enabled",
+            )
+            proxy_mode = st.radio(
+                "代理来源",
+                options=list(PROXY_MODE_LABELS.keys()),
+                index=0 if str(proxy_config.get("mode")) == "system" else 1,
+                format_func=lambda item: PROXY_MODE_LABELS[item],
+                horizontal=True,
+                key="admin_proxy_mode",
+            )
+            proxy_type = st.radio(
+                "代理类型",
+                options=list(PROXY_TYPE_LABELS.keys()),
+                index=0 if str(proxy_config.get("proxy_type")) != "socks5" else 1,
+                format_func=lambda item: PROXY_TYPE_LABELS[item],
+                horizontal=True,
+                key="admin_proxy_type",
+            )
+            proxy_host = st.text_input(
+                "主机",
+                value=str(proxy_config.get("host") or "127.0.0.1"),
+                key="admin_proxy_host",
+            )
+            proxy_port = st.number_input(
+                "端口",
+                min_value=1,
+                max_value=65535,
+                value=int(proxy_config.get("port") or 7890),
+                step=1,
+                key="admin_proxy_port",
+            )
+            proxy_username = st.text_input(
+                "用户名",
+                value=str(proxy_config.get("username") or ""),
+                key="admin_proxy_username",
+            )
+            proxy_password = st.text_input(
+                "密码",
+                value=str(proxy_config.get("password") or ""),
+                type="password",
+                key="admin_proxy_password",
+            )
+            st.caption(
+                "选择“系统代理”时，发送动作会优先读取当前运行环境暴露的代理设置；"
+                "如果你已经明确知道本地端口，公网部署通常更适合直接填写自定义代理。"
+            )
 
-        channel_col_1, channel_col_2 = st.columns(2, gap="large")
-        with channel_col_1:
-            st.markdown("#### 企业微信")
+        with smtp_tab:
+            smtp_enabled = st.toggle(
+                "启用邮件通知",
+                value=bool(smtp_config.get("enabled")),
+                key="admin_smtp_enabled",
+            )
+            smtp_security_mode = st.selectbox(
+                "安全方式",
+                options=list(SMTP_SECURITY_LABELS.keys()),
+                index=list(SMTP_SECURITY_LABELS.keys()).index(smtp_security_mode_from_config(smtp_config)),
+                format_func=lambda item: SMTP_SECURITY_LABELS[item],
+                key="admin_smtp_security_mode",
+            )
+            smtp_host = st.text_input(
+                "SMTP 主机",
+                value=str(smtp_config.get("host") or ""),
+                key="admin_smtp_host",
+            )
+            smtp_port = st.number_input(
+                "端口",
+                min_value=1,
+                max_value=65535,
+                value=int(smtp_config.get("port") or 465),
+                step=1,
+                key="admin_smtp_port",
+            )
+            smtp_username = st.text_input(
+                "用户名",
+                value=str(smtp_config.get("username") or ""),
+                key="admin_smtp_username",
+            )
+            smtp_password = st.text_input(
+                "密码 / App Password",
+                value=str(smtp_config.get("password") or ""),
+                type="password",
+                key="admin_smtp_password",
+            )
+            smtp_sender = st.text_input(
+                "发件人",
+                value=str(smtp_config.get("sender") or ""),
+                key="admin_smtp_sender",
+            )
+            smtp_receivers = st.text_area(
+                "收件人",
+                value=join_lines(list(smtp_config.get("receivers", []))),
+                help="每行一个邮箱，也支持逗号分隔；保存时会自动归一化。",
+                height=120,
+                key="admin_smtp_receivers",
+            )
+
+        with wecom_tab:
             wecom_enabled = st.toggle(
                 "启用企业微信",
                 value=bool(wecom_config.get("enabled")),
@@ -804,19 +874,18 @@ def render_admin_settings(snapshot, notification_service: NotificationService, c
                 "提醒账号",
                 value=join_lines(list(wecom_config.get("mentioned_list", []))),
                 help="每行一个账号，或直接输入 @all。",
-                height=96,
+                height=110,
                 key="admin_wecom_mentions",
             )
             wecom_mobiles = st.text_area(
                 "提醒手机号",
                 value=join_lines(list(wecom_config.get("mentioned_mobile_list", []))),
                 help="每行一个手机号。",
-                height=96,
+                height=110,
                 key="admin_wecom_mobiles",
             )
 
-        with channel_col_2:
-            st.markdown("#### 飞书")
+        with feishu_tab:
             feishu_enabled = st.toggle(
                 "启用飞书",
                 value=bool(feishu_config.get("enabled")),
@@ -829,21 +898,19 @@ def render_admin_settings(snapshot, notification_service: NotificationService, c
             )
             st.caption("飞书机器人只需要 webhook 即可；测试消息会直接发送到对应群。")
 
-        action_col_1, action_col_2 = st.columns(2, gap="medium")
-        save_clicked = action_col_1.form_submit_button(
+        save_clicked = st.form_submit_button(
             "保存配置",
             type="primary",
             use_container_width=True,
         )
-        save_test_clicked = action_col_2.form_submit_button(
+        save_test_clicked = st.form_submit_button(
             "保存并发送测试",
             use_container_width=True,
         )
 
-    reload_col, lock_col = st.columns([1, 1], gap="medium")
-    if reload_col.button("从文件重载当前配置", use_container_width=True, key="admin_reload_config"):
+    if st.button("从文件重载当前配置", use_container_width=True, key="admin_reload_config"):
         st.rerun()
-    if lock_col.button("锁定配置工作区", use_container_width=True, key="admin_lock_workspace"):
+    if st.button("锁定配置工作区", use_container_width=True, key="admin_lock_workspace"):
         st.session_state["copper_pulse_admin_unlocked"] = False
         st.rerun()
 
@@ -885,10 +952,13 @@ def render_admin_settings(snapshot, notification_service: NotificationService, c
         }
 
         try:
-            saved_config = notification_service.save_config(payload)
+            with st.spinner("保存配置中..."):
+                saved_config = notification_service.save_config(payload)
+            st.toast("配置已保存", icon="✅")
             st.success("配置已保存，网页端与桌面端现在共用这份通知设置。")
             if save_test_clicked:
-                result = notification_service.send_test_notification(snapshot=snapshot)
+                with st.spinner("发送测试消息中..."):
+                    result = notification_service.send_test_notification(snapshot=snapshot)
                 if result.sent:
                     st.success(result.summary)
                 elif result.attempted:
@@ -960,12 +1030,14 @@ def render_admin_workspace(snapshot) -> None:
     else:
         st.success("管理员口令已启用，当前会话已解锁。")
 
-    overview_tab, settings_tab = st.tabs(["工作区概览", "通知与代理设置"])
-    with overview_tab:
-        render_admin_overview(config, notification_service)
+    with st.container(border=True):
+        st.markdown("<div class='workspace-panel'></div>", unsafe_allow_html=True)
+        overview_tab, settings_tab = st.tabs(["工作区概览", "通知与代理设置"])
+        with overview_tab:
+            render_admin_overview(config, notification_service)
 
-    with settings_tab:
-        render_admin_settings(snapshot, notification_service, config)
+        with settings_tab:
+            render_admin_settings(snapshot, notification_service, config)
 
 
 def main() -> None:
@@ -976,27 +1048,63 @@ def main() -> None:
         "五日 1 小时": ("5d", "1h"),
     }
 
-    with st.sidebar:
-        st.markdown("## 监控配置")
-        auto_refresh = st.toggle("自动刷新", value=True)
-        refresh_interval = st.slider("刷新间隔（秒）", min_value=30, max_value=300, value=60, step=30)
-        chart_label = st.selectbox("图表窗口", list(chart_options.keys()), index=0)
-        manual_refresh = st.button("立即刷新", type="primary", use_container_width=True)
+    if "copper_pulse_refresh_nonce" not in st.session_state:
+        st.session_state["copper_pulse_refresh_nonce"] = 0
+
+    admin_workspace_open = bool(st.session_state.get("copper_pulse_admin_unlocked", False))
+
+    control_shell = st.container(border=True)
+    with control_shell:
+        st.markdown("### 监控配置")
+        st.caption("网页端改为主工作区控制栏，不再依赖浏览器左上角的默认侧栏折叠入口。")
+        chart_label = st.selectbox(
+            "图表窗口",
+            list(chart_options.keys()),
+            index=0,
+            key="main_chart_label",
+        )
+        refresh_interval = st.slider(
+            "刷新间隔（秒）",
+            min_value=30,
+            max_value=300,
+            value=60,
+            step=30,
+            key="main_refresh_interval",
+        )
+        auto_refresh = st.toggle("自动刷新", value=True, key="main_auto_refresh")
+        manual_refresh = st.button("立即刷新", type="primary", use_container_width=True, key="main_manual_refresh")
         st.caption(
             "容器默认使用 `Asia/Shanghai`，并建议挂载宿主机 `/etc/localtime`，"
             "让本地时间语义和宿主机尽量保持一致。"
         )
 
     if manual_refresh:
-        st.rerun()
+        st.session_state["copper_pulse_refresh_nonce"] += 1
+        st.toast("正在刷新最新行情...", icon="🔄")
 
-    if auto_refresh:
+    auto_refresh_paused = auto_refresh and admin_workspace_open
+    if auto_refresh_paused:
+        st.info("通知工作区已解锁，自动刷新已暂时暂停，避免编辑表单时被页面重跑打断。")
+    elif auto_refresh:
         st_autorefresh(interval=refresh_interval * 1000, key="copper-pulse-refresh")
 
+    render_control_panel(
+        auto_refresh=auto_refresh,
+        refresh_interval=refresh_interval,
+        chart_label=chart_label,
+        auto_refresh_paused=auto_refresh_paused,
+    )
+
     period, interval = chart_options[chart_label]
+    cache_bucket = 0 if auto_refresh_paused or not auto_refresh else int(time.time() // max(15, refresh_interval))
 
     with st.spinner("同步最新行情中..."):
-        snapshot = MarketDataService().fetch_dashboard(period=period, interval=interval)
+        snapshot = load_dashboard_snapshot(
+            period=period,
+            interval=interval,
+            refresh_nonce=int(st.session_state["copper_pulse_refresh_nonce"]),
+            cache_bucket=cache_bucket,
+        )
 
     render_hero(snapshot, auto_refresh=auto_refresh, refresh_interval=refresh_interval, chart_label=chart_label)
 
@@ -1004,60 +1112,64 @@ def main() -> None:
         for message in snapshot.status_messages:
             st.warning(message)
 
-    chart_col, side_col = st.columns([1.55, 1], gap="large")
+    market_tab, admin_tab, info_tab = st.tabs(["行情总览", "通知与代理", "计算与说明"])
 
-    with chart_col:
-        render_section_heading(
-            "盘中联动曲线",
-            "把铜期货和 SCCO 的开窗首个有效价格归一化为 100，方便直接看斜率和联动方向。",
-        )
-        relative_history = normalize_history_for_comparison(
-            {
-                "铜期货": snapshot.copper_history,
-                "SCCO": snapshot.scco_history,
-            }
-        )
-        if relative_history.empty:
-            st.info("当前没有可用于绘图的日内数据。")
-        else:
-            st.line_chart(relative_history, height=320, use_container_width=True)
-            st.caption("归一化基准 = 图表窗口内首个有效价格。")
+    with market_tab:
+        chart_col, side_col = st.columns([1.55, 1], gap="large")
 
-    with side_col:
-        render_section_heading(
-            "溢价与监控要点",
-            "先看估值温度，再看铜价区间、股本与股息率这些会直接影响解释力的字段。",
-        )
-        render_premium_panel(snapshot)
-        render_insight_panel(snapshot)
+        with chart_col:
+            render_section_heading(
+                "盘中联动曲线",
+                "把铜期货和 SCCO 的开窗首个有效价格归一化为 100，方便直接看斜率和联动方向。",
+            )
+            relative_history = normalize_history_for_comparison(
+                {
+                    "铜期货": snapshot.copper_history,
+                    "SCCO": snapshot.scco_history,
+                }
+            )
+            if relative_history.empty:
+                st.info("当前没有可用于绘图的日内数据。")
+            else:
+                st.line_chart(relative_history, height=320, use_container_width=True)
+                st.caption("归一化基准 = 图表窗口内首个有效价格。")
 
-    copper_col, scco_col = st.columns(2, gap="large")
+        with side_col:
+            render_section_heading(
+                "溢价与监控要点",
+                "先看估值温度，再看铜价区间、股本与股息率这些会直接影响解释力的字段。",
+            )
+            render_premium_panel(snapshot)
+            render_insight_panel(snapshot)
 
-    with copper_col:
-        render_section_heading(
-            "纽约铜期货快照",
-            "聚焦价格、涨跌和区间位置，适合快速确认铜价当天的交易重心。",
-        )
-        st.dataframe(
-            build_quote_table(snapshot.copper, is_equity=False),
-            use_container_width=True,
-            hide_index=True,
-        )
+        copper_col, scco_col = st.columns(2, gap="large")
 
-    with scco_col:
-        render_section_heading(
-            "SCCO 快照",
-            "除价格外，保留市值、股本、股息率和 Beta，帮助理解股价端的资源映射。",
-        )
-        st.dataframe(
-            build_quote_table(snapshot.scco, is_equity=True),
-            use_container_width=True,
-            hide_index=True,
-        )
+        with copper_col:
+            render_section_heading(
+                "纽约铜期货快照",
+                "聚焦价格、涨跌和区间位置，适合快速确认铜价当天的交易重心。",
+            )
+            st.dataframe(
+                build_quote_table(snapshot.copper, is_equity=False),
+                use_container_width=True,
+                hide_index=True,
+            )
 
-    render_admin_workspace(snapshot)
+        with scco_col:
+            render_section_heading(
+                "SCCO 快照",
+                "除价格外，保留市值、股本、股息率和 Beta，帮助理解股价端的资源映射。",
+            )
+            st.dataframe(
+                build_quote_table(snapshot.scco, is_equity=True),
+                use_container_width=True,
+                hide_index=True,
+            )
 
-    with st.expander("计算逻辑与容器时间说明"):
+    with admin_tab:
+        render_admin_workspace(snapshot)
+
+    with info_tab:
         st.markdown(
             f"""
             - 溢价率公式：`(SCCO 股价 × 总股本) × {PREMIUM_MULTIPLIER} / 900亿 / 铜期货价格`
