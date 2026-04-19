@@ -1,0 +1,69 @@
+services:
+  # SQL Server数据库
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: quant-sqlserver
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=${DB_PASSWORD:-QuantTrading@2024}
+      - MSSQL_PID=Express
+    ports:
+      - "11433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "if [ -x /opt/mssql-tools18/bin/sqlcmd ]; then /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$SA_PASSWORD\" -Q \"SELECT 1\"; elif [ -x /opt/mssql-tools/bin/sqlcmd ]; then /opt/mssql-tools/bin/sqlcmd -C -S localhost -U sa -P \"$$SA_PASSWORD\" -Q \"SELECT 1\"; else exit 1; fi"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # 后端API服务
+  backend:
+    build:
+      context: ./backend/QuantTrading.Api
+      dockerfile: Dockerfile
+    container_name: quant-backend
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=sqlserver;Database=QuantTrading;User Id=sa;Password=${DB_PASSWORD:-QuantTrading@2024};TrustServerCertificate=true
+      - LongBridge__AppKey=${LONGBRIDGE_APP_KEY}
+      - LongBridge__AppSecret=${LONGBRIDGE_APP_SECRET}
+      - LongBridge__AccessToken=${LONGBRIDGE_ACCESS_TOKEN}
+      - Proxy__Enabled=${PROXY_ENABLED:-false}
+      - Proxy__Host=${PROXY_HOST:-}
+      - Proxy__Port=${PROXY_PORT:-}
+      - Email__Enabled=${EMAIL_ENABLED:-false}
+      - Email__SmtpHost=${EMAIL_SMTP_HOST:-}
+      - Email__SmtpPort=${EMAIL_SMTP_PORT:-587}
+      - Email__Username=${EMAIL_USERNAME:-}
+      - Email__Password=${EMAIL_PASSWORD:-}
+      - Feishu__Enabled=${FEISHU_ENABLED:-false}
+      - Feishu__WebhookUrl=${FEISHU_WEBHOOK_URL:-}
+      - Wechat__Enabled=${WECHAT_ENABLED:-false}
+      - Wechat__WebhookUrl=${WECHAT_WEBHOOK_URL:-}
+    ports:
+      - "15000:5000"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: quant-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  sqlserver_data:

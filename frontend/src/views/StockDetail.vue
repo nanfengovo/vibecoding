@@ -1,0 +1,784 @@
+<template>
+  <div class="stock-detail">
+    <div class="page-header">
+      <div class="stock-info">
+        <h1>{{ stock?.name || symbol }}</h1>
+        <span class="symbol-badge">{{ symbol }}</span>
+        <span class="exchange-badge">{{ stock?.market || 'US' }}</span>
+      </div>
+      <div class="header-actions">
+        <el-button
+          :type="isWatched ? 'default' : 'primary'"
+          :icon="isWatched ? 'StarFilled' : 'Star'"
+          @click="toggleWatch"
+        >
+          {{ isWatched ? '已关注' : '关注' }}
+        </el-button>
+        <el-button :icon="Refresh" @click="refreshData(true)">刷新</el-button>
+      </div>
+    </div>
+
+    <div class="price-overview">
+      <div class="current-price">
+        <span :class="['price', (quote?.change ?? 0) >= 0 ? 'price-up' : 'price-down']">
+          ${{ quote?.current?.toFixed(2) || '-' }}
+        </span>
+        <span :class="['change', (quote?.change ?? 0) >= 0 ? 'price-up' : 'price-down']">
+          {{ formatChange(quote?.change) }} ({{ formatPercent(quote?.changePercent) }})
+        </span>
+      </div>
+      <div class="price-stats">
+        <div class="stat-item">
+          <span class="label">开盘</span>
+          <span class="value">${{ quote?.open?.toFixed(2) || '-' }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="label">最高</span>
+          <span class="value">${{ quote?.high?.toFixed(2) || '-' }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="label">最低</span>
+          <span class="value">${{ quote?.low?.toFixed(2) || '-' }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="label">昨收</span>
+          <span class="value">${{ quote?.previousClose?.toFixed(2) || '-' }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="label">成交量</span>
+          <span class="value">{{ formatVolume(quote?.volume) }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="label">成交额</span>
+          <span class="value">${{ formatTurnover(quote?.turnover) }}</span>
+        </div>
+      </div>
+    </div>
+
+    <el-row :gutter="20">
+      <el-col :span="16">
+        <div class="card chart-section">
+          <div class="card-header">
+            <div class="period-controls">
+              <el-radio-group v-model="klinePeriod" size="small">
+                <el-radio-button value="1">1分</el-radio-button>
+                <el-radio-button value="5">5分</el-radio-button>
+                <el-radio-button value="15">15分</el-radio-button>
+                <el-radio-button value="60">60分</el-radio-button>
+                <el-radio-button value="D">日K</el-radio-button>
+                <el-radio-button value="W">周K</el-radio-button>
+                <el-radio-button value="M">月K</el-radio-button>
+                <el-radio-button value="Y">年K</el-radio-button>
+              </el-radio-group>
+              <el-date-picker
+                v-model="customRange"
+                type="datetimerange"
+                range-separator="至"
+                start-placeholder="开始时间"
+                end-placeholder="结束时间"
+                clearable
+                class="range-picker"
+              />
+            </div>
+            <el-checkbox-group v-model="indicators" class="indicator-select">
+              <el-checkbox value="MA">MA</el-checkbox>
+              <el-checkbox value="MACD">MACD</el-checkbox>
+              <el-checkbox value="RSI">RSI</el-checkbox>
+              <el-checkbox value="BOLL">BOLL</el-checkbox>
+            </el-checkbox-group>
+          </div>
+          <div class="kline-chart">
+            <v-chart :option="klineChartOption" autoresize />
+          </div>
+        </div>
+      </el-col>
+
+      <el-col :span="8">
+        <div class="card company-info">
+          <h3>公司信息</h3>
+          <div class="info-grid">
+            <div class="info-item">
+              <span class="label">市值</span>
+              <span class="value">${{ formatMarketCap(stock?.marketCap) }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">市盈率</span>
+              <span class="value">{{ stock?.pe?.toFixed(2) || '-' }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">每股收益</span>
+              <span class="value">${{ stock?.eps?.toFixed(2) || '-' }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">股息率</span>
+              <span class="value">{{ stock?.dividend?.toFixed(2) || '-' }}%</span>
+            </div>
+            <div class="info-item">
+              <span class="label">52周最高</span>
+              <span class="value">${{ stock?.high52Week?.toFixed(2) || '-' }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">52周最低</span>
+              <span class="value">${{ stock?.low52Week?.toFixed(2) || '-' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card ai-analysis">
+          <div class="ai-header">
+            <h3>AI 分析</h3>
+            <el-button size="small" :loading="aiLoading" @click="runAiAnalysis">生成分析</el-button>
+          </div>
+          <el-input
+            v-model="aiFocus"
+            type="textarea"
+            :rows="2"
+            placeholder="可选：输入分析关注点，如“短线压力位和风险控制”"
+          />
+          <div class="ai-result">
+            <el-skeleton v-if="aiLoading" :rows="6" animated />
+            <template v-else-if="aiResult">
+              <div class="ai-meta">模型：{{ aiResult.model }} · {{ formatDateTime(aiResult.generatedAt) }}</div>
+              <div class="ai-text">{{ aiResult.analysis }}</div>
+            </template>
+            <el-empty v-else description="点击“生成分析”获取 AI 观点" :image-size="72" />
+          </div>
+        </div>
+
+        <div class="card quick-trade">
+          <h3>快速交易</h3>
+          <el-form :model="tradeForm" label-width="60px" size="small">
+            <el-form-item label="方向">
+              <el-radio-group v-model="tradeForm.side">
+                <el-radio-button value="buy">买入</el-radio-button>
+                <el-radio-button value="sell">卖出</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="数量">
+              <el-input-number v-model="tradeForm.quantity" :min="1" :step="10" style="width: 100%" />
+            </el-form-item>
+            <el-form-item label="价格">
+              <el-input-number
+                v-model="tradeForm.price"
+                :min="0"
+                :precision="2"
+                style="width: 100%"
+              />
+            </el-form-item>
+            <el-form-item>
+              <div class="trade-summary">
+                预估金额: ${{ (tradeForm.quantity * tradeForm.price).toFixed(2) }}
+              </div>
+            </el-form-item>
+            <el-form-item>
+              <el-button
+                :type="tradeForm.side === 'buy' ? 'success' : 'danger'"
+                style="width: 100%"
+                @click="submitTrade"
+              >
+                {{ tradeForm.side === 'buy' ? '买入' : '卖出' }}
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </div>
+      </el-col>
+    </el-row>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import dayjs from 'dayjs'
+import { useRoute } from 'vue-router'
+import { use } from 'echarts/core'
+import { CanvasRenderer } from 'echarts/renderers'
+import { CandlestickChart, LineChart, BarChart } from 'echarts/charts'
+import {
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent
+} from 'echarts/components'
+import VChart from 'vue-echarts'
+import { Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { aiApi, stockApi } from '@/api'
+import { useAppStore } from '@/stores/app'
+import type { Candlestick, Stock, StockAnalysisResult, StockQuote } from '@/types'
+
+use([
+  CanvasRenderer,
+  CandlestickChart,
+  LineChart,
+  BarChart,
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
+  DataZoomComponent
+])
+
+const route = useRoute()
+const appStore = useAppStore()
+
+const symbol = computed(() => route.params.symbol as string)
+const stock = ref<Stock | null>(null)
+const quote = ref<StockQuote | null>(null)
+const klineData = ref<Candlestick[]>([])
+const klinePeriod = ref('D')
+const customRange = ref<Date[]>([])
+const indicators = ref(['MA'])
+const aiLoading = ref(false)
+const aiFocus = ref('')
+const aiResult = ref<StockAnalysisResult | null>(null)
+const requestSeed = ref(0)
+
+const tradeForm = ref({
+  side: 'buy',
+  quantity: 100,
+  price: 0
+})
+
+const isWatched = computed(() =>
+  appStore.watchlist.some(item => item.symbol === symbol.value)
+)
+
+const klineChartOption = computed(() => {
+  const dates = klineData.value.map(k => k.time)
+  const ohlc = klineData.value.map(k => [k.open, k.close, k.low, k.high])
+  const volumes = klineData.value.map(k => k.volume)
+
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' }
+    },
+    legend: {
+      data: ['K线', 'MA5', 'MA10', 'MA20', '成交量'],
+      top: 10
+    },
+    grid: [
+      { left: '10%', right: '8%', height: '50%' },
+      { left: '10%', right: '8%', top: '68%', height: '16%' }
+    ],
+    xAxis: [
+      {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: '#8392A5' } }
+      },
+      {
+        type: 'category',
+        gridIndex: 1,
+        data: dates,
+        axisLabel: { show: false }
+      }
+    ],
+    yAxis: [
+      {
+        scale: true,
+        axisLine: { lineStyle: { color: '#8392A5' } },
+        splitLine: { show: false }
+      },
+      {
+        scale: true,
+        gridIndex: 1,
+        splitNumber: 2,
+        axisLabel: { show: false },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false }
+      }
+    ],
+    dataZoom: [
+      { type: 'inside', xAxisIndex: [0, 1], start: 70, end: 100 },
+      { show: true, xAxisIndex: [0, 1], type: 'slider', top: '88%', start: 70, end: 100 }
+    ],
+    series: [
+      {
+        name: 'K线',
+        type: 'candlestick',
+        data: ohlc,
+        itemStyle: {
+          color: '#ef4444',
+          color0: '#10b981',
+          borderColor: '#ef4444',
+          borderColor0: '#10b981'
+        }
+      },
+      ...(indicators.value.includes('MA') ? [
+        {
+          name: 'MA5',
+          type: 'line',
+          data: calculateMA(5),
+          smooth: true,
+          lineStyle: { opacity: 0.8, width: 1 },
+          symbol: 'none'
+        },
+        {
+          name: 'MA10',
+          type: 'line',
+          data: calculateMA(10),
+          smooth: true,
+          lineStyle: { opacity: 0.8, width: 1 },
+          symbol: 'none'
+        },
+        {
+          name: 'MA20',
+          type: 'line',
+          data: calculateMA(20),
+          smooth: true,
+          lineStyle: { opacity: 0.8, width: 1 },
+          symbol: 'none'
+        }
+      ] : []),
+      {
+        name: '成交量',
+        type: 'bar',
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        data: volumes,
+        itemStyle: {
+          color: (params: any) => {
+            const idx = params.dataIndex
+            if (idx === 0) return '#9CA3AF'
+            return klineData.value[idx].close >= klineData.value[idx - 1].close ? '#ef4444' : '#10b981'
+          }
+        }
+      }
+    ]
+  }
+})
+
+function calculateMA(period: number): (number | null)[] {
+  const result: (number | null)[] = []
+  for (let i = 0; i < klineData.value.length; i++) {
+    if (i < period - 1) {
+      result.push(null)
+      continue
+    }
+    let sum = 0
+    for (let j = 0; j < period; j++) {
+      sum += klineData.value[i - j].close
+    }
+    result.push(sum / period)
+  }
+  return result
+}
+
+function normalizeQuote(rawQuote: any): StockQuote {
+  const current = Number(rawQuote?.current ?? rawQuote?.price ?? 0)
+  const previousClose = Number(rawQuote?.previousClose ?? rawQuote?.prevClose ?? current)
+  const change = Number(rawQuote?.change ?? (current - previousClose))
+  const changePercent = Number(
+    rawQuote?.changePercent
+    ?? rawQuote?.change_rate
+    ?? (previousClose ? (change / previousClose) * 100 : 0)
+  )
+
+  return {
+    symbol: rawQuote?.symbol || symbol.value,
+    name: rawQuote?.name || stock.value?.name || symbol.value,
+    current,
+    previousClose,
+    change,
+    changePercent,
+    high: Number(rawQuote?.high ?? current),
+    low: Number(rawQuote?.low ?? current),
+    open: Number(rawQuote?.open ?? current),
+    volume: Number(rawQuote?.volume ?? 0),
+    turnover: Number(rawQuote?.turnover ?? 0),
+    timestamp: rawQuote?.timestamp || new Date().toISOString()
+  }
+}
+
+function normalizeKlines(raw: any[]): Candlestick[] {
+  const normalized = raw
+    .map((item: any) => {
+      const time = item?.time || item?.timestamp || item?.date
+      return {
+        time: typeof time === 'string' ? time : new Date(time).toISOString(),
+        open: Number(item?.open ?? 0),
+        high: Number(item?.high ?? 0),
+        low: Number(item?.low ?? 0),
+        close: Number(item?.close ?? item?.price ?? 0),
+        volume: Number(item?.volume ?? 0)
+      } as Candlestick
+    })
+    .filter(item => !Number.isNaN(new Date(item.time).getTime()))
+    .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+
+  if (klinePeriod.value !== 'Y') {
+    return normalized
+  }
+
+  return aggregateByYear(normalized)
+}
+
+function aggregateByYear(data: Candlestick[]): Candlestick[] {
+  const groups = new Map<number, Candlestick[]>()
+  data.forEach((item) => {
+    const year = new Date(item.time).getUTCFullYear()
+    const bucket = groups.get(year) || []
+    bucket.push(item)
+    groups.set(year, bucket)
+  })
+
+  return Array.from(groups.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([year, bucket]) => {
+      const sorted = [...bucket].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+      const open = sorted[0].open
+      const close = sorted[sorted.length - 1].close
+      const high = Math.max(...sorted.map(x => x.high))
+      const low = Math.min(...sorted.map(x => x.low))
+      const volume = sorted.reduce((sum, row) => sum + row.volume, 0)
+      return {
+        time: `${year}-01-01T00:00:00.000Z`,
+        open,
+        high,
+        low,
+        close,
+        volume
+      }
+    })
+}
+
+async function loadStock(seed: number) {
+  const result = await stockApi.getDetail(symbol.value)
+  if (seed === requestSeed.value) {
+    stock.value = result
+  }
+}
+
+async function loadQuote(seed: number) {
+  const rawQuote = await stockApi.getQuote(symbol.value) as any
+  const normalized = normalizeQuote(rawQuote)
+  if (seed === requestSeed.value) {
+    quote.value = normalized
+    tradeForm.value.price = normalized.current
+  }
+}
+
+async function loadKline(seed: number) {
+  const periodForApi = klinePeriod.value === 'Y' ? 'M' : klinePeriod.value
+  const range = customRange.value?.length === 2
+    ? {
+      start: customRange.value[0].toISOString(),
+      end: customRange.value[1].toISOString()
+    }
+    : undefined
+
+  const raw = await stockApi.getKline(symbol.value, periodForApi, 1000, range) as any[]
+  const normalized = normalizeKlines(raw)
+  if (seed === requestSeed.value) {
+    klineData.value = normalized
+  }
+}
+
+async function refreshData(showMessage = false) {
+  if (!symbol.value) {
+    return
+  }
+
+  requestSeed.value += 1
+  const seed = requestSeed.value
+
+  try {
+    await Promise.all([loadStock(seed), loadQuote(seed), loadKline(seed)])
+    if (showMessage) {
+      ElMessage.success('数据已刷新')
+    }
+  } catch (error) {
+    console.error('Failed to refresh stock detail:', error)
+    if (showMessage) {
+      ElMessage.error('刷新失败，请稍后重试')
+    }
+  }
+}
+
+async function runAiAnalysis() {
+  if (!symbol.value) {
+    return
+  }
+
+  aiLoading.value = true
+  try {
+    const range = customRange.value?.length === 2
+      ? {
+        start: customRange.value[0].toISOString(),
+        end: customRange.value[1].toISOString()
+      }
+      : undefined
+
+    aiResult.value = await aiApi.analyzeStock(symbol.value, {
+      period: klinePeriod.value,
+      start: range?.start,
+      end: range?.end,
+      count: 240,
+      focus: aiFocus.value
+    })
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || 'AI 分析失败，请检查配置')
+  } finally {
+    aiLoading.value = false
+  }
+}
+
+async function toggleWatch() {
+  if (isWatched.value) {
+    const item = appStore.watchlist.find(w => w.symbol === symbol.value)
+    if (item) {
+      await appStore.removeFromWatchlist(item.id)
+      ElMessage.success('已取消关注')
+    }
+  } else {
+    await appStore.addToWatchlist(symbol.value)
+    ElMessage.success('已添加关注')
+  }
+}
+
+function submitTrade() {
+  ElMessage.info('交易功能开发中...')
+}
+
+function formatChange(value?: number): string {
+  if (value === undefined) return '-'
+  return (value >= 0 ? '+' : '') + value.toFixed(2)
+}
+
+function formatPercent(value?: number): string {
+  if (value === undefined) return '-'
+  return (value >= 0 ? '+' : '') + value.toFixed(2) + '%'
+}
+
+function formatVolume(value?: number): string {
+  if (!value) return '-'
+  if (value >= 1000000000) return (value / 1000000000).toFixed(2) + 'B'
+  if (value >= 1000000) return (value / 1000000).toFixed(2) + 'M'
+  if (value >= 1000) return (value / 1000).toFixed(2) + 'K'
+  return value.toString()
+}
+
+function formatTurnover(value?: number): string {
+  if (!value) return '-'
+  if (value >= 1000000000) return (value / 1000000000).toFixed(2) + 'B'
+  if (value >= 1000000) return (value / 1000000).toFixed(2) + 'M'
+  return value.toFixed(2)
+}
+
+function formatMarketCap(value?: number): string {
+  if (!value) return '-'
+  if (value >= 1000000000000) return (value / 1000000000000).toFixed(2) + 'T'
+  if (value >= 1000000000) return (value / 1000000000).toFixed(2) + 'B'
+  if (value >= 1000000) return (value / 1000000).toFixed(2) + 'M'
+  return value.toFixed(2)
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) return '-'
+  return dayjs(value).format('MM-DD HH:mm')
+}
+
+watch(symbol, () => {
+  if (customRange.value.length > 0) {
+    customRange.value = []
+  }
+  aiResult.value = null
+  refreshData(false)
+}, { immediate: true })
+
+watch([klinePeriod, customRange], () => {
+  if (symbol.value) {
+    requestSeed.value += 1
+    const seed = requestSeed.value
+    loadKline(seed).catch((error) => {
+      console.error('Failed to load kline:', error)
+    })
+  }
+})
+</script>
+
+<style lang="scss" scoped>
+.stock-detail {
+  .stock-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    h1 {
+      margin: 0;
+    }
+
+    .symbol-badge {
+      background: #1a56db;
+      color: #fff;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .exchange-badge {
+      background: #e5e7eb;
+      color: #6b7280;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+  }
+
+  .price-overview {
+    background: var(--qt-card-bg);
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 20px;
+    border: 1px solid var(--qt-border);
+
+    .current-price {
+      margin-bottom: 20px;
+
+      .price {
+        font-size: 36px;
+        font-weight: 700;
+        margin-right: 16px;
+      }
+
+      .change {
+        font-size: 18px;
+      }
+    }
+
+    .price-stats {
+      display: flex;
+      gap: 32px;
+
+      .stat-item {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+
+        .label {
+          font-size: 12px;
+          color: #9ca3af;
+        }
+
+        .value {
+          font-size: 15px;
+          font-weight: 500;
+        }
+      }
+    }
+  }
+
+  .card {
+    background: var(--qt-card-bg);
+    border-radius: 8px;
+    padding: 20px;
+    border: 1px solid var(--qt-border);
+    margin-bottom: 20px;
+
+    h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 16px;
+    }
+  }
+
+  .chart-section {
+    .card-header {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .period-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .range-picker {
+      min-width: 320px;
+    }
+
+    .indicator-select {
+      :deep(.el-checkbox) {
+        margin-right: 12px;
+      }
+    }
+
+    .kline-chart {
+      height: 500px;
+    }
+  }
+
+  .company-info {
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+
+      .info-item {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+
+        .label {
+          font-size: 12px;
+          color: #9ca3af;
+        }
+
+        .value {
+          font-size: 15px;
+          font-weight: 500;
+        }
+      }
+    }
+  }
+
+  .ai-analysis {
+    .ai-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .ai-result {
+      margin-top: 12px;
+    }
+
+    .ai-meta {
+      font-size: 12px;
+      color: #6b7280;
+      margin-bottom: 8px;
+    }
+
+    .ai-text {
+      white-space: pre-wrap;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #111827;
+      max-height: 260px;
+      overflow: auto;
+      padding: 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--qt-card-bg) 85%, #64748b 15%);
+      border: 1px solid var(--qt-border);
+    }
+  }
+
+  .quick-trade {
+    .trade-summary {
+      font-size: 14px;
+      color: #6b7280;
+      padding: 8px;
+      background: color-mix(in srgb, var(--qt-card-bg) 90%, #64748b 10%);
+      border-radius: 4px;
+      text-align: center;
+    }
+  }
+}
+</style>
