@@ -1,5 +1,15 @@
 import * as signalR from '@microsoft/signalr'
 
+function resolveHubUrl(): string {
+  const rawValue = String(import.meta.env.VITE_SIGNALR_BASE_URL || '').trim()
+  if (!rawValue) {
+    return '/hubs/trading'
+  }
+
+  const normalized = rawValue.replace(/\/+$/, '')
+  return `${normalized}/hubs/trading`
+}
+
 class SignalRService {
   private connection: signalR.HubConnection | null = null
   private reconnectAttempts = 0
@@ -18,8 +28,10 @@ class SignalRService {
 
     this.manualDisconnect = false
 
+    const hubUrl = resolveHubUrl()
+
     this.connection = new signalR.HubConnectionBuilder()
-      .withUrl('/hubs/trading')
+      .withUrl(hubUrl)
       .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
       .configureLogging(signalR.LogLevel.Information)
       .build()

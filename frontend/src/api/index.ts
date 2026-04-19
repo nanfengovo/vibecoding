@@ -15,8 +15,18 @@ import type {
   StockAnalysisResult
 } from '@/types'
 
+function resolveApiBaseUrl(): string {
+  const rawValue = String(import.meta.env.VITE_API_BASE_URL || '').trim()
+  if (!rawValue) {
+    return '/api'
+  }
+
+  const normalized = rawValue.replace(/\/+$/, '')
+  return normalized.endsWith('/api') ? normalized : `${normalized}/api`
+}
+
 const api: AxiosInstance = axios.create({
-  baseURL: '/api',
+  baseURL: resolveApiBaseUrl(),
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json'

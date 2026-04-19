@@ -33,11 +33,50 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 // Configure CORS
+var corsOrigins = builder.Configuration
+    .GetSection("Cors:AllowedOrigins")
+    .Get<string[]>()?
+    .Where(origin => !string.IsNullOrWhiteSpace(origin))
+    .Select(origin => origin.Trim().TrimEnd('/'))
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray()
+    ?? Array.Empty<string>();
+var allowVercelSubdomains = builder.Configuration.GetValue<bool>("Cors:AllowVercelSubdomains", true);
+
+if (corsOrigins.Length == 0)
+{
+    corsOrigins = new[]
+    {
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost"
+    };
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowVue", policy =>
     {
-        policy.WithOrigins("http://localhost:5173", "http://localhost:3000")
+        policy.SetIsOriginAllowed(origin =>
+              {
+                  if (string.IsNullOrWhiteSpace(origin))
+                  {
+                      return false;
+                  }
+
+                  var normalized = origin.Trim().TrimEnd('/');
+                  if (corsOrigins.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+                  {
+                      return true;
+                  }
+
+                  if (!allowVercelSubdomains || !Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+                  {
+                      return false;
+                  }
+
+                  return uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase);
+              })
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials();
