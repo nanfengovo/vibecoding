@@ -192,6 +192,29 @@ pnpm dev
 3. 请确保遵守相关法律法规和交易所规则
 4. 长桥API有调用频率限制，请合理设置检查间隔
 
+## Streamlit Cloud 部署
+
+本仓库已提供 `streamlit_app.py`，可直接部署到 [share.streamlit.io](https://share.streamlit.io/)。
+
+1. 在 Streamlit Cloud 选择该 GitHub 仓库
+2. Main file path 填写 `streamlit_app.py`
+3. 在 Secrets 配置：
+   - `BACKEND_API_URL`：已部署的后端地址（例如 `https://your-backend.example.com`）
+   - `FRONTEND_URL`：可选，前端地址
+4. 部署后即可查看关注列表、行情和交易记录
+
+## 免费数据库方案
+
+后端已支持 SQL Server 和 Postgres 双驱动。
+
+- 使用 SQL Server（默认）
+  - `DB_PROVIDER=sqlserver`
+- 使用免费 Postgres（推荐 Neon/Supabase）
+  - `DB_PROVIDER=postgres`
+  - `DB_CONNECTION=Host=...;Port=5432;Database=...;Username=...;Password=...;SSL Mode=Require;Trust Server Certificate=true`
+
+在 Docker 场景下，`docker-compose.yml` 已支持通过 `DB_PROVIDER` / `DB_CONNECTION` 覆盖数据库连接。
+
 ## License
 
 MIT

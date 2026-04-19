@@ -44,8 +44,23 @@ builder.Services.AddCors(options =>
 });
 
 // Configure Database
+var databaseProvider = builder.Configuration["Database:Provider"]?.Trim().ToLowerInvariant();
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is required.");
+
 builder.Services.AddDbContext<QuantTradingDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    var usePostgres = databaseProvider == "postgres"
+        || connectionString.Contains("Host=", StringComparison.OrdinalIgnoreCase);
+
+    if (usePostgres)
+    {
+        options.UseNpgsql(connectionString);
+        return;
+    }
+
+    options.UseSqlServer(connectionString);
+});
 
 // Configure HttpClient with proxy support
 builder.Services.AddHttpClient("LongBridge", client =>

@@ -96,6 +96,8 @@ body {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 24px;
+  gap: 12px;
+  flex-wrap: wrap;
 
   h1 {
     font-size: 24px;
@@ -215,5 +217,23 @@ html.dark {
   .el-pagination__jump,
   .el-pagination__sizes {
     color: var(--qt-text-secondary) !important;
+  }
+}
+
+@media (max-width: 960px) {
+  .card {
+    padding: 12px;
+  }
+
+  .page-header {
+    margin-bottom: 12px;
+
+    h1 {
+      font-size: 20px;
+    }
+  }
+
+  .chart-container {
+    height: 300px;
   }
 }

@@ -26,6 +26,12 @@
 - 2026-04-19 22:03 已执行前端构建验证（`npm --prefix frontend run build`），构建成功。
 - 2026-04-19 22:04 更新 `.gitignore`，补充 `frontend/dist`、`bin/obj`、`logs` 等构建产物忽略规则，避免提交冗余文件。
 - 2026-04-19 22:24 已在项目目录初始化 git 仓库并完成提交，代码已推送到 `https://github.com/nanfengovo/vibecoding` 的 `master` 分支（提交 `00d097a`）。
+- 2026-04-19 22:31 为部署准备增强：
+  - 后端支持 `sqlserver/postgres` 双数据库驱动（便于接入 Neon/Supabase 免费 Postgres）；
+  - 新增 `streamlit_app.py` + `requirements.txt` + `.streamlit/config.toml`，可直接用于 Streamlit Cloud 部署；
+  - 更新 `README.md` 增加 Streamlit 部署与免费数据库配置说明；
+  - 增加全局移动端样式兜底（`main.scss`）。
+- 2026-04-19 22:33 再次执行前端构建验证通过；尝试执行后端 `dotnet build` 时环境缺少 `dotnet` 命令，未能完成本地后端编译验证。
 
 # Files Changed
 - `changes/2026-04-19-fix-ui-trade-lowcode/design.md`
@@ -36,6 +42,15 @@
 - `frontend/src/views/LowCodeWorkbench.vue`
 - `frontend/src/views/Watchlist.vue`
 - `.gitignore`
+- `backend/QuantTrading.Api/QuantTrading.Api.csproj`
+- `backend/QuantTrading.Api/Program.cs`
+- `backend/QuantTrading.Api/appsettings.json`
+- `.env.example`
+- `streamlit_app.py`
+- `requirements.txt`
+- `.streamlit/config.toml`
+- `README.md`
+- `frontend/src/styles/main.scss`
 
 # Validation
 - 暂未执行构建验证，待代码改造完成后统一验证。
