@@ -48,6 +48,11 @@
   - `strategyApi.list/get/create/update` 增加策略数据归一化，兼容后端 `configJson/isEnabled` 字段，修复前端 `config/isActive` 显示异常；
   - `Strategies.vue` 去掉“今日执行”模拟值，改为按 `lastExecutedAt` 计算，并增强统计值在暗色模式可见性；
   - 本地容器已重新 `up -d --build`，`/api/strategies/{id}/reload` 接口验证返回 200。
+- 2026-04-19 23:45 针对“部分页面仍不支持主题/响应式”补充修复：
+  - `Strategies.vue` 移除浅色硬编码卡片样式，切换到主题变量，补充统计色类和移动端栅格；
+  - `Backtest.vue` / `Review.vue` / `StrategyEditor.vue` 全量替换卡片、边框、文本硬编码颜色为主题变量，并补充移动端列布局；
+  - `Dashboard.vue` 补充看板文字颜色变量及小屏网格适配；
+  - 前端构建通过并已重建前端容器。
 
 # Files Changed
 - `changes/2026-04-19-fix-ui-trade-lowcode/design.md`
@@ -77,6 +82,10 @@
 - `frontend/src/stores/app.ts`
 - `frontend/src/api/index.ts`
 - `frontend/src/views/Strategies.vue`
+- `frontend/src/views/Backtest.vue`
+- `frontend/src/views/Dashboard.vue`
+- `frontend/src/views/Review.vue`
+- `frontend/src/views/StrategyEditor.vue`
 
 # Validation
 - 暂未执行构建验证，待代码改造完成后统一验证。

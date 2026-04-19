@@ -12,7 +12,7 @@
 
     <el-row :gutter="20">
       <!-- 左侧：基本信息和条件 -->
-      <el-col :span="16">
+      <el-col :xs="24" :lg="16">
         <!-- 基本信息 -->
         <div class="card">
           <h3>基本信息</h3>
@@ -247,7 +247,7 @@
       </el-col>
 
       <!-- 右侧：预览和帮助 -->
-      <el-col :span="8">
+      <el-col :xs="24" :lg="8">
         <!-- 策略预览 -->
         <div class="card strategy-preview">
           <h3>策略预览</h3>
@@ -526,10 +526,10 @@ onMounted(() => {
 <style lang="scss" scoped>
 .strategy-editor {
   .card {
-    background: #fff;
+    background: var(--qt-card-bg);
     border-radius: 8px;
     padding: 20px;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--qt-border);
     margin-bottom: 20px;
 
     h3 {
@@ -552,7 +552,7 @@ onMounted(() => {
 
   .condition-item,
   .action-item {
-    background: #f9fafb;
+    background: rgba(148, 163, 184, 0.1);
     border-radius: 8px;
     padding: 16px;
     margin-bottom: 12px;
@@ -568,7 +568,7 @@ onMounted(() => {
     .condition-index,
     .action-index {
       font-weight: 500;
-      color: #374151;
+      color: var(--qt-text-primary);
     }
 
     .condition-actions {
@@ -592,12 +592,12 @@ onMounted(() => {
 
       .param-label {
         font-size: 13px;
-        color: #6b7280;
+        color: var(--qt-text-secondary);
       }
 
       .param-suffix {
         font-size: 13px;
-        color: #9ca3af;
+        color: var(--qt-text-muted);
       }
     }
   }
@@ -606,7 +606,7 @@ onMounted(() => {
   .empty-actions {
     text-align: center;
     padding: 40px;
-    color: #9ca3af;
+    color: var(--qt-text-muted);
 
     p {
       margin: 12px 0 16px;
@@ -621,7 +621,7 @@ onMounted(() => {
       .preview-section {
         margin-bottom: 16px;
         padding-bottom: 16px;
-        border-bottom: 1px solid #f3f4f6;
+        border-bottom: 1px solid var(--qt-border);
 
         &:last-child {
           border-bottom: none;
@@ -632,7 +632,7 @@ onMounted(() => {
 
       .preview-label {
         font-size: 12px;
-        color: #9ca3af;
+        color: var(--qt-text-muted);
         margin-bottom: 8px;
       }
 
@@ -654,7 +654,7 @@ onMounted(() => {
 
         .operator {
           font-size: 12px;
-          color: #9ca3af;
+          color: var(--qt-text-muted);
         }
       }
 
@@ -675,7 +675,7 @@ onMounted(() => {
       }
 
       .empty-text {
-        color: #9ca3af;
+        color: var(--qt-text-muted);
         font-style: italic;
       }
     }
@@ -702,14 +702,38 @@ onMounted(() => {
       li {
         margin-bottom: 8px;
         font-size: 13px;
-        color: #6b7280;
+        color: var(--qt-text-secondary);
       }
     }
 
     p {
       font-size: 13px;
-      color: #6b7280;
+      color: var(--qt-text-secondary);
       margin: 0;
+    }
+  }
+}
+
+@media (max-width: 960px) {
+  .strategy-editor {
+    .card {
+      padding: 12px;
+    }
+
+    .strategy-preview {
+      position: static;
+    }
+
+    .condition-item,
+    .action-item {
+      padding: 12px;
+    }
+
+    .condition-body,
+    .action-body {
+      > * {
+        width: 100%;
+      }
     }
   }
 }

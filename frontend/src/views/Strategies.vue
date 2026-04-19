@@ -20,13 +20,13 @@
       <el-col :span="6">
         <div class="stat-card">
           <div class="stat-label">运行中</div>
-          <div class="stat-value" style="color: #10b981">{{ activeCount }}</div>
+          <div class="stat-value running-value">{{ activeCount }}</div>
         </div>
       </el-col>
       <el-col :span="6">
         <div class="stat-card">
           <div class="stat-label">已暂停</div>
-          <div class="stat-value" style="color: #f59e0b">{{ pausedCount }}</div>
+          <div class="stat-value paused-value">{{ pausedCount }}</div>
         </div>
       </el-col>
       <el-col :span="6">
@@ -237,16 +237,18 @@ onMounted(() => {
   }
 
   .card {
-    background: #fff;
+    background: var(--qt-card-bg);
     border-radius: 8px;
     padding: 20px;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--qt-border);
   }
 
   .card-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
     margin-bottom: 16px;
   }
 
@@ -276,6 +278,29 @@ onMounted(() => {
 
   .total-value {
     color: var(--qt-text-primary);
+  }
+
+  .running-value {
+    color: #10b981;
+  }
+
+  .paused-value {
+    color: #f59e0b;
+  }
+}
+
+@media (max-width: 960px) {
+  .strategies {
+    .card {
+      padding: 12px;
+    }
+
+    .stat-cards {
+      :deep(.el-col) {
+        max-width: 50%;
+        flex: 0 0 50%;
+      }
+    }
   }
 }
 </style>

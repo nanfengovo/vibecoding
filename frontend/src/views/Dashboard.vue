@@ -438,7 +438,7 @@ onMounted(async () => {
     }
 
     .board-empty {
-      color: #9ca3af;
+      color: var(--qt-text-muted);
       padding: 12px 0;
     }
 
@@ -476,7 +476,7 @@ onMounted(async () => {
     }
 
     .name {
-      color: #6b7280;
+      color: var(--qt-text-secondary);
       font-size: 12px;
     }
 
@@ -498,8 +498,18 @@ onMounted(async () => {
 
     .item-meta {
       margin-top: 6px;
-      color: #6b7280;
+      color: var(--qt-text-secondary);
       font-size: 12px;
+    }
+  }
+}
+
+@media (max-width: 960px) {
+  .dashboard {
+    .watch-board {
+      .board-grid {
+        grid-template-columns: 1fr;
+      }
     }
   }
 }

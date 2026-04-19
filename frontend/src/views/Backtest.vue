@@ -11,7 +11,7 @@
 
     <el-row :gutter="20">
       <!-- 回测列表 -->
-      <el-col :span="8">
+      <el-col :xs="24" :lg="8">
         <div class="card backtest-list">
           <h3>回测记录</h3>
           <el-scrollbar height="600px">
@@ -45,11 +45,11 @@
       </el-col>
 
       <!-- 回测详情 -->
-      <el-col :span="16">
+      <el-col :xs="24" :lg="16">
         <template v-if="selectedBacktest">
           <!-- 统计指标 -->
           <el-row :gutter="16" class="stat-cards">
-            <el-col :span="6">
+            <el-col :xs="12" :md="6">
               <div class="stat-card">
                 <div class="stat-label">总收益</div>
                 <div 
@@ -59,19 +59,19 @@
                 </div>
               </div>
             </el-col>
-            <el-col :span="6">
+            <el-col :xs="12" :md="6">
               <div class="stat-card">
                 <div class="stat-label">年化收益</div>
                 <div class="stat-value">{{ (selectedBacktest.annualizedReturn * 100).toFixed(2) }}%</div>
               </div>
             </el-col>
-            <el-col :span="6">
+            <el-col :xs="12" :md="6">
               <div class="stat-card">
                 <div class="stat-label">最大回撤</div>
                 <div class="stat-value price-down">{{ (selectedBacktest.maxDrawdown * 100).toFixed(2) }}%</div>
               </div>
             </el-col>
-            <el-col :span="6">
+            <el-col :xs="12" :md="6">
               <div class="stat-card">
                 <div class="stat-label">夏普比率</div>
                 <div class="stat-value">{{ selectedBacktest.sharpeRatio.toFixed(2) }}</div>
@@ -80,25 +80,25 @@
           </el-row>
 
           <el-row :gutter="16" class="stat-cards">
-            <el-col :span="6">
+            <el-col :xs="12" :md="6">
               <div class="stat-card">
                 <div class="stat-label">胜率</div>
                 <div class="stat-value">{{ (selectedBacktest.winRate * 100).toFixed(2) }}%</div>
               </div>
             </el-col>
-            <el-col :span="6">
+            <el-col :xs="12" :md="6">
               <div class="stat-card">
                 <div class="stat-label">总交易次数</div>
                 <div class="stat-value">{{ selectedBacktest.totalTrades }}</div>
               </div>
             </el-col>
-            <el-col :span="6">
+            <el-col :xs="12" :md="6">
               <div class="stat-card">
                 <div class="stat-label">盈利次数</div>
                 <div class="stat-value price-up">{{ selectedBacktest.profitTrades }}</div>
               </div>
             </el-col>
-            <el-col :span="6">
+            <el-col :xs="12" :md="6">
               <div class="stat-card">
                 <div class="stat-label">亏损次数</div>
                 <div class="stat-value price-down">{{ selectedBacktest.lossTrades }}</div>
@@ -376,10 +376,10 @@ onMounted(() => {
 <style lang="scss" scoped>
 .backtest {
   .card {
-    background: #fff;
+    background: var(--qt-card-bg);
     border-radius: 8px;
     padding: 20px;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--qt-border);
     margin-bottom: 20px;
 
     h3 {
@@ -396,7 +396,7 @@ onMounted(() => {
   .backtest-list {
     .backtest-item {
       padding: 16px;
-      border: 1px solid #e5e7eb;
+      border: 1px solid var(--qt-border);
       border-radius: 8px;
       margin-bottom: 12px;
       cursor: pointer;
@@ -408,7 +408,7 @@ onMounted(() => {
 
       &.active {
         border-color: #1a56db;
-        background: #eff6ff;
+        background: rgba(26, 86, 219, 0.12);
       }
 
       .item-header {
@@ -424,7 +424,7 @@ onMounted(() => {
 
       .item-info {
         font-size: 12px;
-        color: #9ca3af;
+        color: var(--qt-text-muted);
         margin-bottom: 8px;
       }
 
@@ -434,14 +434,14 @@ onMounted(() => {
         font-size: 14px;
 
         .drawdown {
-          color: #6b7280;
+          color: var(--qt-text-secondary);
         }
       }
     }
 
     .empty-list {
       text-align: center;
-      color: #9ca3af;
+      color: var(--qt-text-muted);
       padding: 40px;
     }
   }
@@ -456,10 +456,26 @@ onMounted(() => {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    color: #9ca3af;
+    color: var(--qt-text-muted);
 
     p {
       margin-top: 16px;
+    }
+  }
+}
+
+@media (max-width: 960px) {
+  .backtest {
+    .card {
+      padding: 12px;
+    }
+
+    .backtest-list {
+      margin-bottom: 12px;
+    }
+
+    .chart-container {
+      height: 280px;
     }
   }
 }

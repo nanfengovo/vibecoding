@@ -11,7 +11,7 @@
 
     <el-row :gutter="20">
       <!-- 左侧：复盘列表 -->
-      <el-col :span="8">
+      <el-col :xs="24" :lg="8">
         <div class="card review-list">
           <div class="list-header">
             <el-date-picker
@@ -53,7 +53,7 @@
       </el-col>
 
       <!-- 右侧：复盘详情 -->
-      <el-col :span="16">
+      <el-col :xs="24" :lg="16">
         <template v-if="selectedReview">
           <div class="card">
             <div class="review-header">
@@ -316,10 +316,10 @@ onMounted(() => {
 <style lang="scss" scoped>
 .review {
   .card {
-    background: #fff;
+    background: var(--qt-card-bg);
     border-radius: 8px;
     padding: 20px;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--qt-border);
     margin-bottom: 20px;
   }
 
@@ -332,7 +332,7 @@ onMounted(() => {
       display: flex;
       gap: 16px;
       padding: 16px;
-      border: 1px solid #e5e7eb;
+      border: 1px solid var(--qt-border);
       border-radius: 8px;
       margin-bottom: 12px;
       cursor: pointer;
@@ -344,7 +344,7 @@ onMounted(() => {
 
       &.active {
         border-color: #1a56db;
-        background: #eff6ff;
+        background: rgba(26, 86, 219, 0.12);
       }
 
       .item-date {
@@ -362,7 +362,7 @@ onMounted(() => {
 
         .weekday {
           font-size: 12px;
-          color: #9ca3af;
+          color: var(--qt-text-muted);
         }
       }
 
@@ -372,7 +372,7 @@ onMounted(() => {
 
         .item-summary {
           font-size: 14px;
-          color: #374151;
+          color: var(--qt-text-primary);
           margin-bottom: 8px;
           display: -webkit-box;
           -webkit-line-clamp: 2;
@@ -389,7 +389,7 @@ onMounted(() => {
 
     .empty-list {
       text-align: center;
-      color: #9ca3af;
+      color: var(--qt-text-muted);
       padding: 40px;
     }
   }
@@ -399,6 +399,8 @@ onMounted(() => {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 24px;
+    gap: 10px;
+    flex-wrap: wrap;
 
     h2 {
       margin: 0;
@@ -413,11 +415,11 @@ onMounted(() => {
       font-size: 16px;
       font-weight: 600;
       margin: 0 0 12px;
-      color: #374151;
+      color: var(--qt-text-primary);
     }
 
     p {
-      color: #6b7280;
+      color: var(--qt-text-secondary);
       line-height: 1.6;
       margin: 0;
     }
@@ -435,10 +437,26 @@ onMounted(() => {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    color: #9ca3af;
+    color: var(--qt-text-muted);
 
     p {
       margin-top: 16px;
+    }
+  }
+}
+
+@media (max-width: 960px) {
+  .review {
+    .card {
+      padding: 12px;
+    }
+
+    .review-list {
+      margin-bottom: 12px;
+    }
+
+    .review-item {
+      padding: 12px;
     }
   }
 }
