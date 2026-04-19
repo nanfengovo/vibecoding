@@ -14,7 +14,7 @@
       <el-col :span="6">
         <div class="stat-card">
           <div class="stat-label">总策略数</div>
-          <div class="stat-value">{{ strategies.length }}</div>
+          <div class="stat-value total-value">{{ strategies.length }}</div>
         </div>
       </el-col>
       <el-col :span="6">
@@ -32,7 +32,7 @@
       <el-col :span="6">
         <div class="stat-card">
           <div class="stat-label">今日执行</div>
-          <div class="stat-value">{{ todayExecutions }}</div>
+          <div class="stat-value total-value">{{ todayExecutions }}</div>
         </div>
       </el-col>
     </el-row>
@@ -151,7 +151,9 @@ const pausedCount = computed(() =>
   strategies.value.filter(s => !s.isActive).length
 )
 
-const todayExecutions = ref(12) // 模拟数据
+const todayExecutions = computed(() =>
+  strategies.value.filter(s => s.lastExecutedAt && dayjs(s.lastExecutedAt).isSame(dayjs(), 'day')).length
+)
 
 const filteredStrategies = computed(() => {
   let result = strategies.value
@@ -270,6 +272,10 @@ onMounted(() => {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+  }
+
+  .total-value {
+    color: var(--qt-text-primary);
   }
 }
 </style>

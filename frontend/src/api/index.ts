@@ -23,6 +23,61 @@ const api: AxiosInstance = axios.create({
   }
 })
 
+function parseStrategyConfig(configSource: any) {
+  const fallback = {
+    conditions: [] as any[],
+    actions: [] as any[],
+    targetSymbols: [] as string[],
+    checkInterval: 300
+  }
+
+  let raw = configSource
+  if (typeof configSource === 'string') {
+    try {
+      raw = JSON.parse(configSource)
+    } catch {
+      raw = {}
+    }
+  }
+
+  if (!raw || typeof raw !== 'object') {
+    return fallback
+  }
+
+  const targetSymbols = Array.isArray(raw.targetSymbols)
+    ? raw.targetSymbols
+    : (Array.isArray(raw.symbols) ? raw.symbols : [])
+
+  const conditions = Array.isArray(raw.conditions)
+    ? raw.conditions
+    : [
+      ...(Array.isArray(raw.entryConditions) ? raw.entryConditions : []),
+      ...(Array.isArray(raw.exitConditions) ? raw.exitConditions : [])
+    ]
+
+  return {
+    conditions,
+    actions: Array.isArray(raw.actions) ? raw.actions : [],
+    targetSymbols,
+    checkInterval: Number(raw.checkInterval ?? raw.checkIntervalSeconds ?? 300)
+  }
+}
+
+function normalizeStrategy(raw: any): Strategy {
+  const config = parseStrategyConfig(raw?.config ?? raw?.configJson)
+
+  return {
+    id: Number(raw?.id ?? 0),
+    name: String(raw?.name ?? ''),
+    description: String(raw?.description ?? ''),
+    config,
+    isActive: Boolean(raw?.isActive ?? raw?.isEnabled),
+    createdAt: String(raw?.createdAt ?? new Date().toISOString()),
+    updatedAt: String(raw?.updatedAt ?? new Date().toISOString()),
+    lastExecutedAt: raw?.lastExecutedAt ? String(raw.lastExecutedAt) : undefined
+  }
+}
+
 // 响应拦截器
 api.interceptors.response.use(
   (response: AxiosResponse) => response.data,
@@ -65,23 +120,31 @@ export const stockApi = {
 
 // 策略API
 export const strategyApi = {
-  list: () => 
-    api.get<any, Strategy[]>('/strategies'),
+  list: async () => {
+    const rows = await api.get<any, any[]>('/strategies')
+    return (rows || []).map(normalizeStrategy)
+  },
   
-  get: (id: number) => 
-    api.get<any, Strategy>(`/strategies/${id}`),
+  get: async (id: number) => {
+    const row = await api.get<any, any>(`/strategies/${id}`)
+    return normalizeStrategy(row)
+  },
   
-  create: (data: Partial<Strategy>) => 
-    api.post<any, Strategy>('/strategies', data),
+  create: async (data: Partial<Strategy>) => {
+    const row = await api.post<any, any>('/strategies', data)
+    return normalizeStrategy(row)
+  },
   
-  update: (id: number, data: Partial<Strategy>) => 
-    api.put<any, Strategy>(`/strategies/${id}`, data),
+  update: async (id: number, data: Partial<Strategy>) => {
+    const row = await api.put<any, any>(`/strategies/${id}`, data)
+    return normalizeStrategy(row)
+  },
   
   delete: (id: number) => 
     api.delete(`/strategies/${id}`),
   
   toggle: (id: number, isActive: boolean) => 
-    api.patch(`/strategies/${id}/toggle`, { isActive }),
+    api.post(`/strategies/${id}/toggle`, { isActive }),
   
   execute: (id: number) => 
     api.post(`/strategies/${id}/execute`),

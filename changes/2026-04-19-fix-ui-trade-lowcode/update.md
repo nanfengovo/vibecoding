@@ -43,6 +43,11 @@
 - 2026-04-19 23:24 已完成编译验证：
   - `npm --prefix frontend run build` 通过；
   - `docker compose build backend` 通过（存在历史 warning，不阻塞构建）。
+- 2026-04-19 23:31 针对“策略中心没生效”补充修复：
+  - `strategyApi.toggle` 从 `PATCH` 改为后端实际支持的 `POST /strategies/{id}/toggle`；
+  - `strategyApi.list/get/create/update` 增加策略数据归一化，兼容后端 `configJson/isEnabled` 字段，修复前端 `config/isActive` 显示异常；
+  - `Strategies.vue` 去掉“今日执行”模拟值，改为按 `lastExecutedAt` 计算，并增强统计值在暗色模式可见性；
+  - 本地容器已重新 `up -d --build`，`/api/strategies/{id}/reload` 接口验证返回 200。
 
 # Files Changed
 - `changes/2026-04-19-fix-ui-trade-lowcode/design.md`
@@ -70,6 +75,8 @@
 - `backend/QuantTrading.Api/Controllers/StrategiesController.cs`
 - `frontend/src/api/signalr.ts`
 - `frontend/src/stores/app.ts`
+- `frontend/src/api/index.ts`
+- `frontend/src/views/Strategies.vue`
 
 # Validation
 - 暂未执行构建验证，待代码改造完成后统一验证。
