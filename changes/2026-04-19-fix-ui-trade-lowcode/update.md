@@ -32,6 +32,17 @@
   - 更新 `README.md` 增加 Streamlit 部署与免费数据库配置说明；
   - 增加全局移动端样式兜底（`main.scss`）。
 - 2026-04-19 22:33 再次执行前端构建验证通过；尝试执行后端 `dotnet build` 时环境缺少 `dotnet` 命令，未能完成本地后端编译验证。
+- 2026-04-19 23:23 新增实时推送能力：
+  - 后端新增 `RealtimePushService`，统一向 TradingHub 推送 `QuoteUpdate / TradeUpdate / Notification / MonitorAlert / StrategyReloaded`；
+  - `WatchlistService` 在刷新行情后主动推送实时行情，且修正 `PreviousClose` 计算来源；
+  - `MonitorService` 在触发规则后推送监控告警与站内通知；
+  - `TradeService` 在下单/撤单后推送交易更新与通知；
+  - `StrategiesController` 增加 `/api/strategies/{id}/reload` 接口，补全前端“热重载”调用缺口；
+  - 前端 `signalr.ts` 增加断线后自动重订阅、手动断开不误重连、事件监听去重；
+  - `app` store 新增交易/监控告警监听，增强通知可见性。
+- 2026-04-19 23:24 已完成编译验证：
+  - `npm --prefix frontend run build` 通过；
+  - `docker compose build backend` 通过（存在历史 warning，不阻塞构建）。
 
 # Files Changed
 - `changes/2026-04-19-fix-ui-trade-lowcode/design.md`
@@ -51,6 +62,14 @@
 - `.streamlit/config.toml`
 - `README.md`
 - `frontend/src/styles/main.scss`
+- `backend/QuantTrading.Api/Services/Realtime/IRealtimePushService.cs`
+- `backend/QuantTrading.Api/Services/Realtime/RealtimePushService.cs`
+- `backend/QuantTrading.Api/Services/Monitor/WatchlistService.cs`
+- `backend/QuantTrading.Api/Services/Monitor/MonitorService.cs`
+- `backend/QuantTrading.Api/Services/Monitor/TradeService.cs`
+- `backend/QuantTrading.Api/Controllers/StrategiesController.cs`
+- `frontend/src/api/signalr.ts`
+- `frontend/src/stores/app.ts`
 
 # Validation
 - 暂未执行构建验证，待代码改造完成后统一验证。

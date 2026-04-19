@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using QuantTrading.Api.Models;
+using QuantTrading.Api.Services.Realtime;
 using QuantTrading.Api.Services.Strategy;
 
 namespace QuantTrading.Api.Controllers;
@@ -10,11 +11,16 @@ public class StrategiesController : ControllerBase
 {
     private readonly IStrategyService _strategyService;
     private readonly IStrategyEngine _strategyEngine;
+    private readonly IRealtimePushService _realtimePushService;
 
-    public StrategiesController(IStrategyService strategyService, IStrategyEngine strategyEngine)
+    public StrategiesController(
+        IStrategyService strategyService,
+        IStrategyEngine strategyEngine,
+        IRealtimePushService realtimePushService)
     {
         _strategyService = strategyService;
         _strategyEngine = strategyEngine;
+        _realtimePushService = realtimePushService;
     }
 
     [HttpGet]
@@ -85,6 +91,26 @@ public class StrategiesController : ControllerBase
         
         await _strategyEngine.ExecuteStrategyAsync(strategy);
         return Ok();
+    }
+
+    [HttpPost("{id}/reload")]
+    public async Task<ActionResult> Reload(int id)
+    {
+        var strategy = await _strategyService.GetByIdAsync(id);
+        if (strategy == null)
+            return NotFound();
+
+        await _realtimePushService.PushStrategyReloadedAsync(id);
+        await _realtimePushService.PushNotificationAsync(
+            "策略热重载",
+            $"策略「{strategy.Name}」已重新加载",
+            "success");
+
+        return Ok(new
+        {
+            strategyId = id,
+            message = "策略已重载"
+        });
     }
 
     [HttpGet("{id}/executions")]

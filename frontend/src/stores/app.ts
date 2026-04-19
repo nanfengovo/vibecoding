@@ -169,8 +169,24 @@ export const useAppStore = defineStore('app', () => {
       updateQuote(quote)
     })
 
+    signalRService.onTradeUpdate((trade) => {
+      addNotification({
+        type: 'success',
+        title: '交易状态更新',
+        message: `${trade?.symbol || ''} ${trade?.side || ''} ${trade?.status || ''}`.trim()
+      })
+    })
+
     signalRService.onNotification((notification) => {
       addNotification(notification)
+    })
+
+    signalRService.onMonitorAlert((alert) => {
+      addNotification({
+        type: 'warning',
+        title: '监控规则触发',
+        message: alert?.message || `${alert?.symbol || ''} 触发监控条件`
+      })
     })
 
     signalRService.onStrategyReloaded((strategyId) => {

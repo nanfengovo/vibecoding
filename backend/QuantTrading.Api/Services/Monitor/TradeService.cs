@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using QuantTrading.Api.Data;
 using QuantTrading.Api.Models;
 using QuantTrading.Api.Services.LongBridge;
+using QuantTrading.Api.Services.Realtime;
 
 namespace QuantTrading.Api.Services.Monitor;
 
@@ -9,15 +10,18 @@ public class TradeService : ITradeService
 {
     private readonly QuantTradingDbContext _dbContext;
     private readonly ILongBridgeService _longBridgeService;
+    private readonly IRealtimePushService _realtimePushService;
     private readonly ILogger<TradeService> _logger;
 
     public TradeService(
         QuantTradingDbContext dbContext,
         ILongBridgeService longBridgeService,
+        IRealtimePushService realtimePushService,
         ILogger<TradeService> logger)
     {
         _dbContext = dbContext;
         _longBridgeService = longBridgeService;
+        _realtimePushService = realtimePushService;
         _logger = logger;
     }
 
@@ -143,6 +147,24 @@ public class TradeService : ITradeService
         
         _dbContext.Trades.Add(trade);
         await _dbContext.SaveChangesAsync();
+
+        await _realtimePushService.PushTradeAsync(new
+        {
+            id = trade.Id,
+            orderId = trade.OrderId,
+            symbol = trade.Symbol,
+            side = trade.Side,
+            orderType = trade.OrderType,
+            quantity = trade.Quantity,
+            price = trade.Price,
+            status = trade.Status,
+            strategyId = trade.StrategyId,
+            createdAt = trade.CreatedAt
+        });
+        await _realtimePushService.PushNotificationAsync(
+            "交易指令已提交",
+            $"{trade.Symbol} {trade.Side.ToUpperInvariant()} {trade.Quantity}",
+            "success");
         
         _logger.LogInformation("Order placed: {Symbol} {Side} {Quantity} @ {Price}, OrderId: {OrderId}", 
             symbol, side, quantity, price, orderId);
@@ -161,6 +183,24 @@ public class TradeService : ITradeService
             {
                 trade.Status = "cancelled";
                 await _dbContext.SaveChangesAsync();
+
+                await _realtimePushService.PushTradeAsync(new
+                {
+                    id = trade.Id,
+                    orderId = trade.OrderId,
+                    symbol = trade.Symbol,
+                    side = trade.Side,
+                    orderType = trade.OrderType,
+                    quantity = trade.Quantity,
+                    price = trade.Price,
+                    status = trade.Status,
+                    strategyId = trade.StrategyId,
+                    createdAt = trade.CreatedAt
+                });
+                await _realtimePushService.PushNotificationAsync(
+                    "交易已撤销",
+                    $"{trade.Symbol} 订单 {trade.OrderId}",
+                    "warning");
             }
             
             _logger.LogInformation("Order cancelled: {OrderId}", orderId);

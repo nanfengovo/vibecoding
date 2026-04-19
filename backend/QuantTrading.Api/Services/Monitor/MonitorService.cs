@@ -4,6 +4,7 @@ using QuantTrading.Api.Data;
 using QuantTrading.Api.Models;
 using QuantTrading.Api.Services.LongBridge;
 using QuantTrading.Api.Services.Notification;
+using QuantTrading.Api.Services.Realtime;
 using QuantTrading.Api.Services.Strategy;
 
 namespace QuantTrading.Api.Services.Monitor;
@@ -14,6 +15,7 @@ public class MonitorService : IMonitorService
     private readonly ILongBridgeService _longBridgeService;
     private readonly IStrategyEngine _strategyEngine;
     private readonly INotificationService _notificationService;
+    private readonly IRealtimePushService _realtimePushService;
     private readonly ILogger<MonitorService> _logger;
 
     public MonitorService(
@@ -21,12 +23,14 @@ public class MonitorService : IMonitorService
         ILongBridgeService longBridgeService,
         IStrategyEngine strategyEngine,
         INotificationService notificationService,
+        IRealtimePushService realtimePushService,
         ILogger<MonitorService> logger)
     {
         _dbContext = dbContext;
         _longBridgeService = longBridgeService;
         _strategyEngine = strategyEngine;
         _notificationService = notificationService;
+        _realtimePushService = realtimePushService;
         _logger = logger;
     }
 
@@ -164,6 +168,23 @@ public class MonitorService : IMonitorService
                 
                 _dbContext.MonitorAlerts.Add(alert);
                 await _dbContext.SaveChangesAsync();
+
+                await _realtimePushService.PushMonitorAlertAsync(new
+                {
+                    id = alert.Id,
+                    monitorRuleId = alert.MonitorRuleId,
+                    symbol = alert.Symbol,
+                    alertType = alert.AlertType,
+                    message = alert.Message,
+                    dataJson = alert.DataJson,
+                    isRead = alert.IsRead,
+                    triggeredAt = alert.TriggeredAt
+                });
+
+                await _realtimePushService.PushNotificationAsync(
+                    $"监控触发: {rule.Name}",
+                    $"{symbol} 当前价格: {quote?.Price:F2}",
+                    "warning");
                 
                 // Send notification
                 if (channels.Any())

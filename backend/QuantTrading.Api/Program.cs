@@ -8,6 +8,7 @@ using QuantTrading.Api.Services.LongBridge;
 using QuantTrading.Api.Services.Strategy;
 using QuantTrading.Api.Services.Backtest;
 using QuantTrading.Api.Services.Monitor;
+using QuantTrading.Api.Services.Realtime;
 using QuantTrading.Api.Jobs;
 using QuantTrading.Api.Hubs;
 
@@ -92,6 +93,7 @@ builder.Services.AddScoped<IMonitorService, MonitorService>();
 builder.Services.AddScoped<IWatchlistService, WatchlistService>();
 builder.Services.AddScoped<ITradeService, TradeService>();
 builder.Services.AddScoped<IAiAnalysisService, OpenAiAnalysisService>();
+builder.Services.AddSingleton<IRealtimePushService, RealtimePushService>();
 
 // Configure Quartz for scheduled jobs
 builder.Services.AddQuartz(q =>

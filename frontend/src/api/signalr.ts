@@ -4,11 +4,19 @@ class SignalRService {
   private connection: signalR.HubConnection | null = null
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
+  private manualDisconnect = false
+  private quoteSubscriptions = new Set<string>()
+  private strategySubscriptions = new Set<number>()
 
   async connect(): Promise<void> {
-    if (this.connection?.state === signalR.HubConnectionState.Connected) {
+    if (
+      this.connection?.state === signalR.HubConnectionState.Connected ||
+      this.connection?.state === signalR.HubConnectionState.Connecting
+    ) {
       return
     }
+
+    this.manualDisconnect = false
 
     this.connection = new signalR.HubConnectionBuilder()
       .withUrl('/hubs/trading')
@@ -23,26 +31,41 @@ class SignalRService {
     this.connection.onreconnected((connectionId) => {
       console.log('SignalR 已重连', connectionId)
       this.reconnectAttempts = 0
+      void this.resubscribeAll()
     })
 
     this.connection.onclose((error) => {
       console.log('SignalR 连接关闭', error)
-      this.tryReconnect()
+      if (!this.manualDisconnect) {
+        void this.tryReconnect()
+      }
     })
 
     try {
       await this.connection.start()
       console.log('SignalR 已连接')
       this.reconnectAttempts = 0
+      await this.resubscribeAll()
     } catch (error) {
       console.error('SignalR 连接失败', error)
-      this.tryReconnect()
+      void this.tryReconnect()
     }
   }
 
   private async tryReconnect(): Promise<void> {
+    if (this.manualDisconnect) {
+      return
+    }
+
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error('SignalR 重连次数已达上限')
+      return
+    }
+
+    if (
+      this.connection?.state === signalR.HubConnectionState.Connected ||
+      this.connection?.state === signalR.HubConnectionState.Connecting
+    ) {
       return
     }
 
@@ -50,33 +73,63 @@ class SignalRService {
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
     
     setTimeout(() => {
-      this.connect()
+      void this.connect()
     }, delay)
   }
 
   disconnect(): void {
+    this.manualDisconnect = true
     if (this.connection) {
-      this.connection.stop()
+      void this.connection.stop()
       this.connection = null
+    }
+  }
+
+  private async resubscribeAll(): Promise<void> {
+    if (this.connection?.state !== signalR.HubConnectionState.Connected) {
+      return
+    }
+
+    const quoteSymbols = Array.from(this.quoteSubscriptions)
+    if (quoteSymbols.length > 0) {
+      await this.connection.invoke('SubscribeQuote', quoteSymbols)
+    }
+
+    const strategyIds = Array.from(this.strategySubscriptions)
+    for (const strategyId of strategyIds) {
+      await this.connection.invoke('SubscribeStrategy', strategyId)
     }
   }
 
   // 订阅行情
   async subscribeQuote(symbols: string[]): Promise<void> {
+    const normalizedSymbols = symbols
+      .map((symbol) => String(symbol || '').trim().toUpperCase())
+      .filter(Boolean)
+
+    normalizedSymbols.forEach((symbol) => this.quoteSubscriptions.add(symbol))
+
     if (this.connection?.state === signalR.HubConnectionState.Connected) {
-      await this.connection.invoke('SubscribeQuote', symbols)
+      await this.connection.invoke('SubscribeQuote', normalizedSymbols)
     }
   }
 
   // 取消订阅行情
   async unsubscribeQuote(symbols: string[]): Promise<void> {
+    const normalizedSymbols = symbols
+      .map((symbol) => String(symbol || '').trim().toUpperCase())
+      .filter(Boolean)
+
+    normalizedSymbols.forEach((symbol) => this.quoteSubscriptions.delete(symbol))
+
     if (this.connection?.state === signalR.HubConnectionState.Connected) {
-      await this.connection.invoke('UnsubscribeQuote', symbols)
+      await this.connection.invoke('UnsubscribeQuote', normalizedSymbols)
     }
   }
 
   // 订阅策略状态
   async subscribeStrategy(strategyId: number): Promise<void> {
+    this.strategySubscriptions.add(strategyId)
     if (this.connection?.state === signalR.HubConnectionState.Connected) {
       await this.connection.invoke('SubscribeStrategy', strategyId)
     }
@@ -84,6 +137,7 @@ class SignalRService {
 
   // 监听行情更新
   onQuoteUpdate(callback: (quote: any) => void): void {
+    this.connection?.off('QuoteUpdate')
     this.connection?.on('QuoteUpdate', (arg1: any, arg2?: any) => {
       // Compatible with both payload styles:
       // 1) QuoteUpdate(quote)
@@ -104,26 +158,31 @@ class SignalRService {
 
   // 监听策略执行
   onStrategyExecuted(callback: (result: any) => void): void {
+    this.connection?.off('StrategyExecuted')
     this.connection?.on('StrategyExecuted', callback)
   }
 
   // 监听交易更新
   onTradeUpdate(callback: (trade: any) => void): void {
+    this.connection?.off('TradeUpdate')
     this.connection?.on('TradeUpdate', callback)
   }
 
   // 监听通知
   onNotification(callback: (notification: any) => void): void {
+    this.connection?.off('Notification')
     this.connection?.on('Notification', callback)
   }
 
   // 监听监控告警
   onMonitorAlert(callback: (alert: any) => void): void {
+    this.connection?.off('MonitorAlert')
     this.connection?.on('MonitorAlert', callback)
   }
 
   // 监听策略热重载
   onStrategyReloaded(callback: (strategyId: number) => void): void {
+    this.connection?.off('StrategyReloaded')
     this.connection?.on('StrategyReloaded', callback)
   }
 

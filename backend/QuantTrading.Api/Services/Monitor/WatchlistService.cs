@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using QuantTrading.Api.Data;
 using QuantTrading.Api.Models;
 using QuantTrading.Api.Services.LongBridge;
+using QuantTrading.Api.Services.Realtime;
 
 namespace QuantTrading.Api.Services.Monitor;
 
@@ -9,15 +10,18 @@ public class WatchlistService : IWatchlistService
 {
     private readonly QuantTradingDbContext _dbContext;
     private readonly ILongBridgeService _longBridgeService;
+    private readonly IRealtimePushService _realtimePushService;
     private readonly ILogger<WatchlistService> _logger;
 
     public WatchlistService(
         QuantTradingDbContext dbContext,
         ILongBridgeService longBridgeService,
+        IRealtimePushService realtimePushService,
         ILogger<WatchlistService> logger)
     {
         _dbContext = dbContext;
         _longBridgeService = longBridgeService;
+        _realtimePushService = realtimePushService;
         _logger = logger;
     }
 
@@ -110,9 +114,12 @@ public class WatchlistService : IWatchlistService
             var stock = watchlist.FirstOrDefault(s => s.Symbol.Equals(quote.Symbol, StringComparison.OrdinalIgnoreCase));
             if (stock != null)
             {
-                var previousClose = stock.CurrentPrice > 0 ? stock.CurrentPrice : quote.Price;
+                var previousClose = quote.PreviousClose > 0
+                    ? quote.PreviousClose
+                    : (stock.PreviousClose > 0 ? stock.PreviousClose : stock.CurrentPrice);
                 
                 stock.CurrentPrice = quote.Price;
+                stock.PreviousClose = previousClose;
                 stock.Open = quote.Open;
                 stock.High = quote.High;
                 stock.Low = quote.Low;
@@ -120,6 +127,22 @@ public class WatchlistService : IWatchlistService
                 stock.Change = quote.Price - previousClose;
                 stock.ChangePercent = previousClose > 0 ? (quote.Price - previousClose) / previousClose * 100 : 0;
                 stock.LastUpdated = DateTime.UtcNow;
+
+                await _realtimePushService.PushQuoteAsync(stock.Symbol, new
+                {
+                    symbol = stock.Symbol,
+                    name = stock.Name,
+                    current = stock.CurrentPrice,
+                    previousClose = stock.PreviousClose,
+                    change = stock.Change,
+                    changePercent = stock.ChangePercent,
+                    high = stock.High,
+                    low = stock.Low,
+                    open = stock.Open,
+                    volume = stock.Volume,
+                    turnover = quote.Turnover,
+                    timestamp = stock.LastUpdated
+                });
             }
         }
         
