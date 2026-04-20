@@ -42,6 +42,7 @@ var corsOrigins = builder.Configuration
     .ToArray()
     ?? Array.Empty<string>();
 var allowVercelSubdomains = builder.Configuration.GetValue<bool>("Cors:AllowVercelSubdomains", true);
+var allowAnyOrigin = builder.Configuration.GetValue<bool>("Cors:AllowAnyOrigin", true);
 
 if (corsOrigins.Length == 0)
 {
@@ -57,29 +58,38 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowVue", policy =>
     {
+        if (allowAnyOrigin)
+        {
+            policy.SetIsOriginAllowed(_ => true)
+                  .AllowAnyMethod()
+                  .AllowAnyHeader()
+                  .AllowCredentials();
+            return;
+        }
+
         policy.SetIsOriginAllowed(origin =>
-              {
-                  if (string.IsNullOrWhiteSpace(origin))
-                  {
-                      return false;
-                  }
+            {
+                if (string.IsNullOrWhiteSpace(origin))
+                {
+                    return false;
+                }
 
-                  var normalized = origin.Trim().TrimEnd('/');
-                  if (corsOrigins.Contains(normalized, StringComparer.OrdinalIgnoreCase))
-                  {
-                      return true;
-                  }
+                var normalized = origin.Trim().TrimEnd('/');
+                if (corsOrigins.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
 
-                  if (!allowVercelSubdomains || !Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
-                  {
-                      return false;
-                  }
+                if (!allowVercelSubdomains || !Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+                {
+                    return false;
+                }
 
-                  return uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase);
-              })
-              .AllowAnyMethod()
-              .AllowAnyHeader()
-              .AllowCredentials();
+                return uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase);
+            })
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .AllowCredentials();
     });
 });
 
@@ -173,6 +183,18 @@ if (app.Environment.IsDevelopment())
 app.UseCors("AllowVue");
 app.UseAuthorization();
 
+app.MapGet("/", () => Results.Ok(new
+{
+    service = "QuantTrading.Api",
+    status = "ok",
+    utc = DateTime.UtcNow,
+    endpoints = new
+    {
+        health = "/health",
+        api = "/api/*",
+        hubs = "/hubs/*"
+    }
+}));
 app.MapGet("/health", () => Results.Text("healthy", "text/plain"));
 app.MapControllers();
 app.MapHub<TradingHub>("/hubs/trading");
