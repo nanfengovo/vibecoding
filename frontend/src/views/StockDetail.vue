@@ -141,7 +141,9 @@
             <el-skeleton v-if="aiLoading" :rows="6" animated />
             <template v-else-if="aiResult">
               <div class="ai-meta">模型：{{ aiResult.model }} · {{ formatDateTime(aiResult.generatedAt) }}</div>
-              <div class="ai-text">{{ aiResult.analysis }}</div>
+              <el-scrollbar class="ai-text-scroll" max-height="280px">
+                <div class="ai-text">{{ aiResult.analysis }}</div>
+              </el-scrollbar>
             </template>
             <el-empty v-else description="点击“生成分析”获取 AI 观点" :image-size="72" />
           </div>
@@ -798,12 +800,29 @@ watch([klinePeriod, customRange], () => {
       font-size: 13px;
       line-height: 1.6;
       color: var(--qt-text-primary);
-      max-height: 260px;
-      overflow: auto;
       padding: 10px;
       border-radius: 8px;
       background: color-mix(in srgb, var(--qt-card-bg) 85%, #64748b 15%);
       border: 1px solid var(--qt-border);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .ai-text-scroll {
+      border-radius: 8px;
+      border: 1px solid var(--qt-border);
+      background: color-mix(in srgb, var(--qt-card-bg) 85%, #64748b 15%);
+
+      :deep(.el-scrollbar__wrap) {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-y;
+      }
+
+      :deep(.el-scrollbar__view) {
+        min-height: 100%;
+      }
     }
   }
 
