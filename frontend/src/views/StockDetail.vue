@@ -129,7 +129,12 @@
         <div class="card ai-analysis">
           <div class="ai-header">
             <h3>AI 分析</h3>
-            <el-button size="small" :loading="aiLoading" @click="runAiAnalysis">生成分析</el-button>
+            <div class="ai-actions">
+              <el-button size="small" :loading="aiLoading" @click="runAiAnalysis">生成分析</el-button>
+              <el-button size="small" :icon="CopyDocument" :disabled="!aiResult" @click="copyAiAnalysis">
+                复制
+              </el-button>
+            </div>
           </div>
           <el-input
             v-model="aiFocus"
@@ -141,8 +146,21 @@
             <el-skeleton v-if="aiLoading" :rows="6" animated />
             <template v-else-if="aiResult">
               <div class="ai-meta">模型：{{ aiResult.model }} · {{ formatDateTime(aiResult.generatedAt) }}</div>
-              <el-scrollbar class="ai-text-scroll" max-height="280px">
-                <div class="ai-text">{{ aiResult.analysis }}</div>
+              <div v-if="aiToc.length > 0" class="ai-toc">
+                <span class="toc-label">目录：</span>
+                <el-button
+                  v-for="item in aiToc"
+                  :key="item.id"
+                  link
+                  size="small"
+                  class="toc-item"
+                  @click="scrollToAiSection(item.id)"
+                >
+                  {{ item.title }}
+                </el-button>
+              </div>
+              <el-scrollbar class="ai-text-scroll" max-height="320px">
+                <div class="ai-text" v-html="aiHtml" />
               </el-scrollbar>
             </template>
             <el-empty v-else description="点击“生成分析”获取 AI 观点" :image-size="72" />
@@ -204,7 +222,7 @@ import {
   TooltipComponent
 } from 'echarts/components'
 import VChart from 'vue-echarts'
-import { Refresh } from '@element-plus/icons-vue'
+import { CopyDocument, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { aiApi, stockApi } from '@/api'
 import { useAppStore } from '@/stores/app'
@@ -245,6 +263,16 @@ const tradeForm = ref({
 const isWatched = computed(() =>
   appStore.watchlist.some(item => item.symbol === symbol.value)
 )
+
+type AiHeading = {
+  id: string
+  title: string
+  level: number
+}
+
+const aiParsed = computed(() => parseAiMarkdown(aiResult.value?.analysis || ''))
+const aiHtml = computed(() => aiParsed.value.html)
+const aiToc = computed(() => aiParsed.value.toc.filter(item => item.level <= 3))
 
 const klineChartOption = computed(() => {
   const dates = klineData.value.map(k => k.time)
@@ -583,6 +611,139 @@ function formatDateTime(value?: string): string {
   return dayjs(value).format('MM-DD HH:mm')
 }
 
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function formatInlineMarkdown(raw: string): string {
+  const escaped = escapeHtml(raw)
+  return escaped
+    .replace(/`([^`]+?)`/g, '<code>$1</code>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+}
+
+function headingId(title: string, index: number): string {
+  const normalized = title
+    .toLowerCase()
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+  return `ai-${normalized || 'section'}-${index}`
+}
+
+function parseAiMarkdown(raw: string): { html: string; toc: AiHeading[] } {
+  if (!raw.trim()) {
+    return { html: '', toc: [] }
+  }
+
+  const lines = raw.split(/\r?\n/)
+  const toc: AiHeading[] = []
+  const htmlParts: string[] = []
+  let inUnorderedList = false
+  let inOrderedList = false
+  let headingIndex = 0
+
+  const closeLists = () => {
+    if (inUnorderedList) {
+      htmlParts.push('</ul>')
+      inUnorderedList = false
+    }
+
+    if (inOrderedList) {
+      htmlParts.push('</ol>')
+      inOrderedList = false
+    }
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) {
+      closeLists()
+      continue
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/)
+    if (headingMatch) {
+      closeLists()
+      const level = headingMatch[1].length
+      const title = headingMatch[2].trim()
+      const id = headingId(title, headingIndex++)
+      toc.push({ id, title, level })
+      htmlParts.push(`<h${level} id="${id}">${formatInlineMarkdown(title)}</h${level}>`)
+      continue
+    }
+
+    const unorderedMatch = trimmed.match(/^[-*]\s+(.+)$/)
+    if (unorderedMatch) {
+      if (inOrderedList) {
+        htmlParts.push('</ol>')
+        inOrderedList = false
+      }
+
+      if (!inUnorderedList) {
+        htmlParts.push('<ul>')
+        inUnorderedList = true
+      }
+
+      htmlParts.push(`<li>${formatInlineMarkdown(unorderedMatch[1])}</li>`)
+      continue
+    }
+
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/)
+    if (orderedMatch) {
+      if (inUnorderedList) {
+        htmlParts.push('</ul>')
+        inUnorderedList = false
+      }
+
+      if (!inOrderedList) {
+        htmlParts.push('<ol>')
+        inOrderedList = true
+      }
+
+      htmlParts.push(`<li>${formatInlineMarkdown(orderedMatch[1])}</li>`)
+      continue
+    }
+
+    closeLists()
+    htmlParts.push(`<p>${formatInlineMarkdown(trimmed)}</p>`)
+  }
+
+  closeLists()
+  return { html: htmlParts.join(''), toc }
+}
+
+async function copyAiAnalysis() {
+  const content = aiResult.value?.analysis?.trim()
+  if (!content) {
+    return
+  }
+
+  try {
+    await navigator.clipboard.writeText(content)
+    ElMessage.success('AI 分析已复制')
+  } catch (error) {
+    console.error('Failed to copy AI analysis:', error)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+function scrollToAiSection(id: string) {
+  const element = document.getElementById(id)
+  if (!element) {
+    return
+  }
+
+  element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
 watch(symbol, () => {
   if (customRange.value.length > 0) {
     customRange.value = []
@@ -785,6 +946,12 @@ watch([klinePeriod, customRange], () => {
       margin-bottom: 12px;
     }
 
+    .ai-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
     .ai-result {
       margin-top: 12px;
     }
@@ -795,8 +962,33 @@ watch([klinePeriod, customRange], () => {
       margin-bottom: 8px;
     }
 
+    .ai-toc {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 8px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--qt-border);
+      background: color-mix(in srgb, var(--qt-card-bg) 90%, #64748b 10%);
+    }
+
+    .toc-label {
+      font-size: 12px;
+      color: var(--qt-text-secondary);
+      margin-right: 2px;
+    }
+
+    .toc-item {
+      font-size: 12px;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .ai-text {
-      white-space: pre-wrap;
       font-size: 13px;
       line-height: 1.6;
       color: var(--qt-text-primary);
@@ -806,6 +998,50 @@ watch([klinePeriod, customRange], () => {
       border: 1px solid var(--qt-border);
       overflow-wrap: anywhere;
       word-break: break-word;
+
+      :deep(h1),
+      :deep(h2),
+      :deep(h3),
+      :deep(h4) {
+        margin: 12px 0 8px;
+        line-height: 1.4;
+      }
+
+      :deep(h1) {
+        font-size: 18px;
+      }
+
+      :deep(h2) {
+        font-size: 16px;
+      }
+
+      :deep(h3),
+      :deep(h4) {
+        font-size: 14px;
+      }
+
+      :deep(p) {
+        margin: 0 0 8px;
+      }
+
+      :deep(ul),
+      :deep(ol) {
+        margin: 0 0 10px 18px;
+        padding: 0;
+      }
+
+      :deep(li) {
+        margin-bottom: 4px;
+      }
+
+      :deep(code) {
+        font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        background: color-mix(in srgb, var(--qt-card-bg) 82%, #0f172a 18%);
+        border: 1px solid var(--qt-border);
+        border-radius: 4px;
+        padding: 1px 5px;
+        font-size: 12px;
+      }
     }
 
     .ai-text-scroll {
