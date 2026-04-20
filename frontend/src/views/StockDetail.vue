@@ -906,7 +906,7 @@ watch([klinePeriod, customRange], () => {
 @media (max-width: 640px) {
   .stock-detail {
     .stock-info h1 {
-      font-size: 34px;
+      font-size: 28px;
     }
 
     .price-overview {
