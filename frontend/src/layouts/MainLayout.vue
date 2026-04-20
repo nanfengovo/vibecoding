@@ -55,14 +55,6 @@
         </div>
         
         <div class="header-right">
-          <el-tooltip :content="appStore.theme === 'dark' ? '切换浅色' : '切换深色'" placement="bottom">
-            <el-button
-              circle
-              :icon="appStore.theme === 'dark' ? Sunny : Moon"
-              @click="appStore.toggleTheme"
-            />
-          </el-tooltip>
-
           <!-- 搜索股票 -->
           <el-autocomplete
             v-model="searchQuery"
@@ -80,8 +72,21 @@
             </template>
           </el-autocomplete>
 
+          <el-tooltip
+            :content="appStore.theme === 'dark' ? '切换浅色' : '切换深色'"
+            placement="bottom"
+            :disabled="isMobile"
+          >
+            <el-button
+              circle
+              class="theme-toggle"
+              :icon="appStore.theme === 'dark' ? Sunny : Moon"
+              @click="appStore.toggleTheme"
+            />
+          </el-tooltip>
+
           <!-- 通知 -->
-          <el-popover placement="bottom-end" :width="320" trigger="click">
+          <el-popover placement="bottom-end" :width="isMobile ? 280 : 320" trigger="click">
             <template #reference>
               <el-badge :value="unreadCount" :hidden="unreadCount === 0" class="notification-badge">
                 <el-button :icon="Bell" circle />
@@ -117,8 +122,10 @@
           </el-popover>
 
           <!-- 连接状态 -->
-          <el-tooltip :content="connectionStatus" placement="bottom">
-            <div :class="['connection-indicator', { connected: isConnected }]" />
+          <el-tooltip :content="connectionStatus" placement="bottom" :disabled="isMobile">
+            <div class="connection-wrapper">
+              <div :class="['connection-indicator', { connected: isConnected }]" />
+            </div>
           </el-tooltip>
         </div>
       </el-header>
@@ -346,8 +353,9 @@ onUnmounted(() => {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   min-width: 0;
+  margin-left: auto;
 }
 
 .header-left {
@@ -358,12 +366,33 @@ onUnmounted(() => {
 }
 
 .stock-search {
-  width: 240px;
+  width: 260px;
+  flex: 0 1 260px;
   max-width: 100%;
 
   :deep(.el-input__wrapper) {
     border-radius: 20px;
   }
+}
+
+.theme-toggle {
+  border: 1px solid color-mix(in srgb, #3b82f6 45%, transparent);
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  color: #1d4ed8;
+  box-shadow: 0 6px 18px rgba(59, 130, 246, 0.22);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 22px rgba(59, 130, 246, 0.3);
+  }
+}
+
+:global(html.dark) .theme-toggle {
+  border-color: color-mix(in srgb, #38bdf8 55%, transparent);
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  color: #fde047;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.5);
 }
 
 .search-item {
@@ -461,6 +490,12 @@ onUnmounted(() => {
   }
 }
 
+.connection-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .main-content {
   background: var(--qt-bg);
   padding: 24px;
@@ -504,17 +539,58 @@ onUnmounted(() => {
   }
 
   .header {
-    height: 56px;
+    min-height: 56px;
+    height: auto;
     padding: 0 12px;
     gap: 8px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .header-left,
+  .header-right {
+    width: 100%;
+  }
+
+  .header-left {
+    justify-content: space-between;
   }
 
   .header-right {
     gap: 8px;
+    align-items: center;
   }
 
   .stock-search {
-    width: 140px;
+    width: auto;
+    min-width: 0;
+    flex: 1 1 auto;
+    order: 1;
+
+    :deep(.el-input__wrapper) {
+      height: 34px;
+    }
+  }
+
+  .theme-toggle {
+    order: 2;
+  }
+
+  .notification-badge {
+    order: 3;
+  }
+
+  .connection-wrapper {
+    display: none;
+  }
+
+  :deep(.el-breadcrumb__item:last-child .el-breadcrumb__inner) {
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .main-content {

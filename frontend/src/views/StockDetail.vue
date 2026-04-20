@@ -55,21 +55,23 @@
       </div>
     </div>
 
-    <el-row :gutter="20">
-      <el-col :span="16">
+    <el-row :gutter="20" class="detail-grid">
+      <el-col :xs="24" :md="16">
         <div class="card chart-section">
           <div class="card-header">
             <div class="period-controls">
-              <el-radio-group v-model="klinePeriod" size="small">
-                <el-radio-button value="1">1分</el-radio-button>
-                <el-radio-button value="5">5分</el-radio-button>
-                <el-radio-button value="15">15分</el-radio-button>
-                <el-radio-button value="60">60分</el-radio-button>
-                <el-radio-button value="D">日K</el-radio-button>
-                <el-radio-button value="W">周K</el-radio-button>
-                <el-radio-button value="M">月K</el-radio-button>
-                <el-radio-button value="Y">年K</el-radio-button>
-              </el-radio-group>
+              <div class="period-scroll">
+                <el-radio-group v-model="klinePeriod" size="small" class="period-group">
+                  <el-radio-button value="1">1分</el-radio-button>
+                  <el-radio-button value="5">5分</el-radio-button>
+                  <el-radio-button value="15">15分</el-radio-button>
+                  <el-radio-button value="60">60分</el-radio-button>
+                  <el-radio-button value="D">日K</el-radio-button>
+                  <el-radio-button value="W">周K</el-radio-button>
+                  <el-radio-button value="M">月K</el-radio-button>
+                  <el-radio-button value="Y">年K</el-radio-button>
+                </el-radio-group>
+              </div>
               <el-date-picker
                 v-model="customRange"
                 type="datetimerange"
@@ -93,7 +95,7 @@
         </div>
       </el-col>
 
-      <el-col :span="8">
+      <el-col :xs="24" :md="8">
         <div class="card company-info">
           <h3>公司信息</h3>
           <div class="info-grid">
@@ -600,13 +602,24 @@ watch([klinePeriod, customRange], () => {
 
 <style lang="scss" scoped>
 .stock-detail {
+  .page-header {
+    align-items: flex-start;
+  }
+
+  .detail-grid {
+    margin-bottom: 0;
+  }
+
   .stock-info {
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-wrap: wrap;
 
     h1 {
       margin: 0;
+      font-size: 36px;
+      line-height: 1.15;
     }
 
     .symbol-badge {
@@ -618,12 +631,18 @@ watch([klinePeriod, customRange], () => {
     }
 
     .exchange-badge {
-      background: #e5e7eb;
-      color: #6b7280;
+      background: color-mix(in srgb, var(--qt-border) 70%, #f8fafc 30%);
+      color: var(--qt-text-secondary);
       padding: 4px 8px;
       border-radius: 4px;
       font-size: 12px;
     }
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
 
   .price-overview {
@@ -648,8 +667,9 @@ watch([klinePeriod, customRange], () => {
     }
 
     .price-stats {
-      display: flex;
-      gap: 32px;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 16px;
 
       .stat-item {
         display: flex;
@@ -694,16 +714,33 @@ watch([klinePeriod, customRange], () => {
     .period-controls {
       display: flex;
       align-items: center;
-      justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
     }
 
+    .period-scroll {
+      flex: 1;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+
+    .period-group {
+      width: max-content;
+      white-space: nowrap;
+    }
+
     .range-picker {
-      min-width: 320px;
+      width: 340px;
+      max-width: 100%;
+      min-width: 280px;
     }
 
     .indicator-select {
+      display: flex;
+      flex-wrap: wrap;
+      row-gap: 8px;
+
       :deep(.el-checkbox) {
         margin-right: 12px;
       }
@@ -752,7 +789,7 @@ watch([klinePeriod, customRange], () => {
 
     .ai-meta {
       font-size: 12px;
-      color: #6b7280;
+      color: var(--qt-text-secondary);
       margin-bottom: 8px;
     }
 
@@ -760,7 +797,7 @@ watch([klinePeriod, customRange], () => {
       white-space: pre-wrap;
       font-size: 13px;
       line-height: 1.6;
-      color: #111827;
+      color: var(--qt-text-primary);
       max-height: 260px;
       overflow: auto;
       padding: 10px;
@@ -773,11 +810,141 @@ watch([klinePeriod, customRange], () => {
   .quick-trade {
     .trade-summary {
       font-size: 14px;
-      color: #6b7280;
+      color: var(--qt-text-secondary);
       padding: 8px;
       background: color-mix(in srgb, var(--qt-card-bg) 90%, #64748b 10%);
       border-radius: 4px;
       text-align: center;
+    }
+  }
+}
+
+@media (max-width: 960px) {
+  .stock-detail {
+    .stock-info h1 {
+      font-size: 30px;
+    }
+
+    .header-actions {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+
+      :deep(.el-button) {
+        width: 100%;
+      }
+    }
+
+    .price-overview {
+      padding: 16px;
+      margin-bottom: 14px;
+
+      .current-price {
+        margin-bottom: 14px;
+
+        .price {
+          display: inline-block;
+          font-size: 42px;
+          margin-right: 10px;
+          line-height: 1;
+        }
+
+        .change {
+          font-size: 28px;
+          font-weight: 600;
+          line-height: 1;
+          vertical-align: baseline;
+        }
+      }
+
+      .price-stats {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+    }
+
+    .chart-section {
+      .period-controls {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .period-scroll {
+        width: 100%;
+      }
+
+      .period-group {
+        display: inline-flex;
+        width: max-content;
+      }
+
+      .range-picker {
+        width: 100%;
+        min-width: 0;
+      }
+
+      .indicator-select {
+        :deep(.el-checkbox) {
+          margin-right: 8px;
+        }
+      }
+
+      .kline-chart {
+        height: 420px;
+      }
+    }
+
+    .company-info {
+      .info-grid {
+        gap: 12px;
+      }
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  .stock-detail {
+    .stock-info h1 {
+      font-size: 34px;
+    }
+
+    .price-overview {
+      .current-price {
+        .price {
+          font-size: 40px;
+        }
+
+        .change {
+          display: block;
+          margin-top: 8px;
+          font-size: 18px;
+          line-height: 1.2;
+        }
+      }
+
+      .price-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    .chart-section {
+      .kline-chart {
+        height: 360px;
+      }
+    }
+
+    .company-info {
+      .info-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .ai-analysis {
+      .ai-header {
+        flex-wrap: wrap;
+        gap: 8px;
+      }
     }
   }
 }

@@ -10,6 +10,8 @@
   --qt-header-bg: #ffffff;
   --qt-sidebar-bg: #1f2937;
   --qt-sidebar-border: #374151;
+  --qt-accent: #3b82f6;
+  --qt-accent-glow: rgba(59, 130, 246, 0.24);
 }
 
 html.dark {
@@ -23,6 +25,8 @@ html.dark {
   --qt-header-bg: #0f172a;
   --qt-sidebar-bg: #0f172a;
   --qt-sidebar-border: #1f2937;
+  --qt-accent: #60a5fa;
+  --qt-accent-glow: rgba(96, 165, 250, 0.22);
 
   --el-bg-color: #111827;
   --el-bg-color-overlay: #0f172a;
@@ -51,6 +55,24 @@ body {
 
 #app {
   height: 100%;
+}
+
+body,
+.card,
+.stat-card,
+.el-card,
+.el-dialog,
+.el-drawer,
+.el-popover,
+.el-table,
+.el-input__wrapper,
+.el-select__wrapper,
+.el-button {
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease,
+    border-color 0.25s ease,
+    box-shadow 0.25s ease;
 }
 
 // 滚动条样式
