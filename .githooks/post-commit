@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${QT_AUTO_DEPLOY_ON_COMMIT:-1}" != "1" ]]; then
+  exit 0
+fi
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+BRANCH="$(git branch --show-current)"
+
+# 仅在主分支自动推送与自动更新线上
+if [[ "$BRANCH" != "master" && "$BRANCH" != "main" ]]; then
+  exit 0
+fi
+
+LOG_DIR="$ROOT_DIR/.git/.auto-deploy-logs"
+mkdir -p "$LOG_DIR"
+TS="$(date '+%Y%m%d-%H%M%S')"
+
+{
+  cd "$ROOT_DIR"
+  echo "[post-commit] auto deploy begin ($TS)"
+  if [[ -x "$ROOT_DIR/scripts/auto-online-update.sh" ]]; then
+    "$ROOT_DIR/scripts/auto-online-update.sh"
+  fi
+
+  echo "[post-commit] git push origin $BRANCH"
+  git push origin "$BRANCH"
+  echo "[post-commit] auto deploy done"
+} >> "$LOG_DIR/$TS.log" 2>&1 || true
