@@ -72,6 +72,16 @@
                 />
               </el-select>
             </el-form-item>
+            <el-form-item label="Skill">
+              <el-select v-model="selectedSkillId" placeholder="可选：选择分析技能" clearable style="width: 230px">
+                <el-option
+                  v-for="skill in skillOptions"
+                  :key="skill.id"
+                  :label="skill.label"
+                  :value="skill.id"
+                />
+              </el-select>
+            </el-form-item>
             <el-form-item label="标的">
               <el-input v-model="symbol" placeholder="可选，如 NVDA / 600519.SH" style="width: 230px" />
             </el-form-item>
@@ -190,6 +200,15 @@ const quickPrompts = [
   '如果我只做波段，仓位怎么分配'
 ]
 
+const skillOptions = [
+  { id: 'cross-market-selection', label: '跨市场选股' },
+  { id: 'technical-diagnosis', label: '技术面诊断' },
+  { id: 'financial-research', label: '财报研究' },
+  { id: 'smart-money-tracking', label: '聪明钱追踪' },
+  { id: 'advanced-order', label: '进阶下单' },
+  { id: 'position-review', label: '持仓复盘' }
+]
+
 const sessions = computed(() => chatStore.sessions)
 const activeSession = computed(() => chatStore.activeSession)
 const activeSessionId = computed(() => chatStore.activeSessionId)
@@ -209,6 +228,11 @@ const selectedProviderId = computed({
 const selectedModel = computed({
   get: () => activeSession.value?.model || '',
   set: (value: string) => chatStore.updateSessionMeta({ model: value })
+})
+
+const selectedSkillId = computed({
+  get: () => activeSession.value?.skillId || '',
+  set: (value: string) => chatStore.updateSessionMeta({ skillId: value || '' })
 })
 
 const symbol = computed({
@@ -417,6 +441,7 @@ async function sendQuestion() {
   await chatStore.sendMessage({
     question: text,
     symbol: symbol.value || undefined,
+    skillId: selectedSkillId.value || undefined,
     providerId: selectedProviderId.value || undefined,
     model: selectedModel.value || undefined
   })

@@ -4,6 +4,7 @@ export interface Stock {
   name: string
   exchange?: string
   market?: string
+  currency?: string
   currentPrice: number
   previousClose: number
   open?: number
@@ -212,6 +213,13 @@ export interface SystemConfig {
     appSecret: string
     accessToken: string
     baseUrl: string
+    skillEnabled: boolean
+    skillInstallUrl: string
+    mcpEnabled: boolean
+    mcpServerUrl: string
+    mcpTransport: string
+    mcpClientName: string
+    mcpAuthToken: string
   }
   proxy: {
     enabled: boolean

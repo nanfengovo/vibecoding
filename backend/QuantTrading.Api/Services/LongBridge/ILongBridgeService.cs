@@ -13,6 +13,7 @@ public interface ILongBridgeService
     Task<List<StockKline>> GetKlineAsync(string symbol, string period, DateTime? start = null, DateTime? end = null, int count = 100);
     Task<Stock?> GetStockInfoAsync(string symbol);
     Task<List<Stock>> SearchStocksAsync(string keyword);
+    Task<LongBridgeCompanyProfile?> GetCompanyProfileAsync(string symbol);
     
     // Trade API
     Task<string?> PlaceOrderAsync(string symbol, string side, string orderType, decimal quantity, decimal? price = null);
@@ -35,4 +36,13 @@ public sealed class LongBridgeConnectionTestResult
 {
     public bool Success { get; init; }
     public string Message { get; init; } = string.Empty;
+}
+
+public sealed class LongBridgeCompanyProfile
+{
+    public string Symbol { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public string Overview { get; init; } = string.Empty;
+    public string SourceUrl { get; init; } = string.Empty;
+    public List<KeyValuePair<string, string>> Fields { get; init; } = new();
 }

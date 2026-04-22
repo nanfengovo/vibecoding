@@ -18,6 +18,7 @@ public class LongBridgeService : ILongBridgeService
     private static readonly string[] DefaultSearchMarkets = ["US", "HK", "SH", "SZ", "SG"];
     private static readonly TimeSpan SecurityListCacheDuration = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan StockSnapshotCacheDuration = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan CompanyProfileCacheDuration = TimeSpan.FromMinutes(30);
     private static readonly DateTime UnknownQuoteTimestamp = DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
     private static readonly Regex StooqKlineRowRegex = new(
         "<tr><td[^>]*>\\d+</td><td[^>]*>([^<]+)</td><td>([^<]+)</td><td>([^<]+)</td><td>([^<]+)</td><td>([^<]+)</td><td[^>]*>[^<]*</td><td[^>]*>[^<]*</td><td>([^<]+)</td></tr>",
@@ -28,6 +29,12 @@ public class LongBridgeService : ILongBridgeService
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex NumberTokenRegex = new("[-+]?[0-9]+(?:[\\.,][0-9]+)*", RegexOptions.Compiled);
     private static readonly Regex PairNumberRegex = new("([-+]?[0-9]+(?:[\\.,][0-9]+)*)\\s*/\\s*([-+]?[0-9]+(?:[\\.,][0-9]+)*)", RegexOptions.Compiled);
+    private static readonly Regex FrontmatterTitleRegex = new(@"^title:\s*""?(?<title>[^""]+)""?\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex MarkdownHeadingRegex = new(@"^#\s+(?<title>.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
+    private const string EastMoneySuggestUrl = "https://searchapi.eastmoney.com/api/suggest/get";
+    private const string EastMoneySuggestToken = "D43BF722C8E33BDC906FB84D85E326E8";
+    private const string EastMoneyQuoteUrl = "https://push2.eastmoney.com/api/qt/stock/get";
+    private static readonly string[] LongbridgeQuotePageLocales = ["zh-CN", "en"];
 
     private readonly IConfiguration _configuration;
     private readonly IServiceProvider _serviceProvider;
@@ -35,6 +42,7 @@ public class LongBridgeService : ILongBridgeService
     private readonly SemaphoreSlim _securityListCacheLock = new(1, 1);
     private readonly Dictionary<string, CachedSecurityList> _securityListCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CachedStockSnapshot> _stockSnapshotCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CachedCompanyProfile> _companyProfileCache = new(StringComparer.OrdinalIgnoreCase);
 
     public LongBridgeService(
         IConfiguration configuration,
@@ -190,7 +198,8 @@ public class LongBridgeService : ILongBridgeService
 
         var client = new HttpClient(handler)
         {
-            BaseAddress = new Uri(config.BaseUrl)
+            BaseAddress = new Uri(config.BaseUrl),
+            Timeout = TimeSpan.FromSeconds(8)
         };
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         client.DefaultRequestHeaders.AcceptLanguage.ParseAdd("zh-CN,zh;q=0.9,en;q=0.8");
@@ -216,6 +225,45 @@ public class LongBridgeService : ILongBridgeService
     {
         var result = await SendRequestWithResultAsync(path, method, body);
         return result.Content;
+    }
+
+    private async Task<string?> SendRequestWithFallbackPathsAsync(
+        IEnumerable<string> paths,
+        HttpMethod method,
+        object? body = null)
+    {
+        var candidates = paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        string? firstError = null;
+        foreach (var path in candidates)
+        {
+            var result = await SendRequestWithResultAsync(path, method, body);
+            if (result.Success && !string.IsNullOrWhiteSpace(result.Content))
+            {
+                return result.Content;
+            }
+
+            if (firstError == null && !string.IsNullOrWhiteSpace(result.ErrorMessage))
+            {
+                firstError = result.ErrorMessage;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(firstError))
+        {
+            _logger.LogWarning("LongBridge request failed after trying {Count} paths. First error: {Error}", candidates.Count, firstError);
+        }
+
+        return null;
     }
 
     private async Task<LongBridgeApiCallResult> SendRequestWithResultAsync(string path, HttpMethod method, object? body = null)
@@ -322,7 +370,12 @@ public class LongBridgeService : ILongBridgeService
         }
 
         var upstreamMessage = ExtractErrorMessage(content);
-        _logger.LogError("LongBridge API error: {StatusCode} - {Content}", response.StatusCode, content);
+        _logger.LogError(
+            "LongBridge API error: {StatusCode} path={Path} uri={Uri} content={Content}",
+            response.StatusCode,
+            path,
+            requestUri,
+            content);
         return new LongBridgeApiCallResult(false, null, upstreamMessage);
     }
 
@@ -457,6 +510,15 @@ public class LongBridgeService : ILongBridgeService
             return null;
         }
 
+        if (IsAStockSymbol(normalizedSymbol))
+        {
+            var eastMoneyQuote = await GetAStockQuoteSnapshotAsync(normalizedSymbol);
+            if (eastMoneyQuote != null)
+            {
+                return ConvertEastMoneyQuoteToStockQuote(normalizedSymbol, eastMoneyQuote);
+            }
+        }
+
         var quotes = await GetQuotesInternalAsync(new List<string> { normalizedSymbol }, allowFallback: true);
         var quote = quotes.FirstOrDefault();
         if (quote == null)
@@ -464,7 +526,7 @@ public class LongBridgeService : ILongBridgeService
             return null;
         }
 
-        if (quote.PreviousClose <= 0 || quote.Turnover <= 0)
+        if (!IsAStockSymbol(normalizedSymbol) && (quote.PreviousClose <= 0 || quote.Turnover <= 0))
         {
             var snapshot = await GetStockSnapshotFromStooqAsync(normalizedSymbol);
             if (quote.PreviousClose <= 0 && snapshot.PreviousClose > 0)
@@ -497,11 +559,26 @@ public class LongBridgeService : ILongBridgeService
             return null;
         }
 
+        if (IsAStockSymbol(normalizedSymbol))
+        {
+            var pageQuote = await GetQuoteFromLongbridgePageAsync(normalizedSymbol);
+            if (pageQuote != null && pageQuote.Price > 0 && pageQuote.Timestamp > DateTime.UnixEpoch)
+            {
+                return pageQuote;
+            }
+
+            return null;
+        }
+
         var quotes = await GetQuotesInternalAsync(new List<string> { normalizedSymbol }, allowFallback: false);
         var quote = quotes.FirstOrDefault();
         if (quote == null || quote.Price <= 0 || quote.Timestamp <= DateTime.UnixEpoch)
         {
-            return null;
+            quote = await GetQuoteFromLongbridgePageAsync(normalizedSymbol);
+            if (quote == null || quote.Price <= 0 || quote.Timestamp <= DateTime.UnixEpoch)
+            {
+                return null;
+            }
         }
 
         if (quote.PreviousClose > 0 && quote.Change == 0)
@@ -541,7 +618,14 @@ public class LongBridgeService : ILongBridgeService
         // /v1/quote/realtime?symbol=AAPL.US&symbol=MSFT.US
         var symbolsQuery = string.Join("&", normalizedSymbols
             .Select(symbol => $"symbol={Uri.EscapeDataString(symbol)}"));
-        var response = await SendRequestAsync($"/v1/quote/realtime?{symbolsQuery}", HttpMethod.Get);
+        var response = await SendRequestWithFallbackPathsAsync(
+            [
+                $"/v1/quote/realtime?{symbolsQuery}",
+                $"/v1/quote?{symbolsQuery}",
+                $"/quote/realtime?{symbolsQuery}",
+                $"/quote?{symbolsQuery}"
+            ],
+            HttpMethod.Get);
 
         if (string.IsNullOrEmpty(response))
         {
@@ -633,9 +717,35 @@ public class LongBridgeService : ILongBridgeService
             _logger.LogError(ex, "Error parsing quote response");
         }
 
-        if (!allowFallback)
+        if (allowFallback && result.Count > 0)
         {
-            return result;
+            foreach (var quote in result)
+            {
+                if (!IsAStockSymbol(quote.Symbol))
+                {
+                    continue;
+                }
+
+                var shouldSupplement = quote.Open <= 0
+                    || quote.High <= 0
+                    || quote.Low <= 0
+                    || quote.Volume <= 0
+                    || quote.Turnover <= 0
+                    || quote.Timestamp <= UnknownQuoteTimestamp;
+
+                if (!shouldSupplement)
+                {
+                    continue;
+                }
+
+                var eastMoneyQuote = await GetAStockQuoteSnapshotAsync(quote.Symbol);
+                if (eastMoneyQuote == null)
+                {
+                    continue;
+                }
+
+                MergeQuoteFromEastMoney(quote, eastMoneyQuote);
+            }
         }
 
         var missingSymbols = normalizedSymbols
@@ -644,10 +754,36 @@ public class LongBridgeService : ILongBridgeService
 
         foreach (var missing in missingSymbols)
         {
-            var fallbackQuote = await GetQuoteFromPublicFallbacksAsync(missing);
-            if (fallbackQuote != null)
+            var pageQuote = await GetQuoteFromLongbridgePageAsync(missing);
+            if (pageQuote != null)
             {
-                result.Add(fallbackQuote);
+                if (allowFallback && IsAStockSymbol(missing))
+                {
+                    var eastMoneyQuote = await GetAStockQuoteSnapshotAsync(missing);
+                    if (eastMoneyQuote != null)
+                    {
+                        MergeQuoteFromEastMoney(pageQuote, eastMoneyQuote);
+                    }
+                }
+
+                result.Add(pageQuote);
+                continue;
+            }
+
+            if (allowFallback)
+            {
+                var eastMoneyQuote = await GetAStockQuoteSnapshotAsync(missing);
+                if (eastMoneyQuote != null)
+                {
+                    result.Add(ConvertEastMoneyQuoteToStockQuote(missing, eastMoneyQuote));
+                    continue;
+                }
+
+                var fallbackQuote = await GetQuoteFromPublicFallbacksAsync(missing);
+                if (fallbackQuote != null)
+                {
+                    result.Add(fallbackQuote);
+                }
             }
         }
 
@@ -752,6 +888,9 @@ public class LongBridgeService : ILongBridgeService
             return null;
         }
 
+        var staticInfo = IsAStockSymbol(normalizedSymbol)
+            ? null
+            : await GetStaticSecurityInfoAsync(normalizedSymbol);
         var candidates = await SearchStocksAsync(normalizedSymbol);
         var stockMeta = candidates.FirstOrDefault(s => s.Symbol.Equals(normalizedSymbol, StringComparison.OrdinalIgnoreCase))
             ?? candidates.FirstOrDefault(s => s.Symbol.StartsWith($"{normalizedSymbol}.", StringComparison.OrdinalIgnoreCase));
@@ -765,21 +904,74 @@ public class LongBridgeService : ILongBridgeService
             stockMeta = new Stock
             {
                 Symbol = normalizedSymbol,
-                Name = normalizedSymbol.Split('.').FirstOrDefault() ?? normalizedSymbol,
-                Market = InferMarketFromSymbol(normalizedSymbol)
+                Name = staticInfo?.Name ?? normalizedSymbol.Split('.').FirstOrDefault() ?? normalizedSymbol,
+                Market = staticInfo?.Market ?? InferMarketFromSymbol(normalizedSymbol)
             };
         }
 
         var resolvedSymbol = NormalizeSymbol(stockMeta.Symbol);
+        if (staticInfo == null && !IsAStockSymbol(resolvedSymbol))
+        {
+            staticInfo = await GetStaticSecurityInfoAsync(resolvedSymbol);
+        }
+        var resolvedMarket = string.IsNullOrWhiteSpace(staticInfo?.Market)
+            ? (string.IsNullOrWhiteSpace(stockMeta.Market) ? InferMarketFromSymbol(resolvedSymbol) : stockMeta.Market)
+            : staticInfo!.Market;
+        var resolvedCurrency = ResolveCurrencyCode(staticInfo?.Currency, resolvedMarket);
+        var resolvedName = await ResolveDisplayNameAsync(resolvedSymbol, stockMeta.Name, staticInfo);
 
         var quote = await GetQuoteAsync(resolvedSymbol);
-        var dailyKlines = await GetKlineAsync(resolvedSymbol, "D", count: 260);
-        var snapshot = await GetStockSnapshotFromStooqAsync(resolvedSymbol);
+        var snapshot = IsAStockSymbol(resolvedSymbol)
+            ? new StockSnapshot()
+            : await GetStockSnapshotFromStooqAsync(resolvedSymbol);
+        var eastMoneyQuote = await GetAStockQuoteSnapshotAsync(resolvedSymbol);
+        if (eastMoneyQuote != null)
+        {
+            quote = MergeQuoteWithAStockFallback(quote, resolvedSymbol, eastMoneyQuote);
+            if (snapshot.MarketCap <= 0 && eastMoneyQuote.MarketCap > 0)
+            {
+                snapshot.MarketCap = eastMoneyQuote.MarketCap;
+            }
 
-        var orderedKlines = dailyKlines
-            .Where(k => k.Timestamp != default)
-            .OrderBy(k => k.Timestamp)
-            .ToList();
+            if (snapshot.Pe <= 0 && eastMoneyQuote.Pe > 0)
+            {
+                snapshot.Pe = eastMoneyQuote.Pe;
+            }
+
+            if (IsPoorDisplayName(resolvedName, resolvedSymbol) && !string.IsNullOrWhiteSpace(eastMoneyQuote.Name))
+            {
+                resolvedName = eastMoneyQuote.Name;
+            }
+        }
+
+        if (IsAStockSymbol(resolvedSymbol)
+            && (snapshot.MarketCap <= 0
+                || snapshot.Pe <= 0
+                || IsPoorDisplayName(resolvedName, resolvedSymbol)))
+        {
+            var markdownProfile = await TryFetchCompanyMarkdownAsync(resolvedSymbol);
+            if (markdownProfile != null)
+            {
+                ApplySnapshotFieldsFromMarkdown(snapshot, markdownProfile.Fields);
+                if (IsPoorDisplayName(resolvedName, resolvedSymbol)
+                    && !IsPoorDisplayName(markdownProfile.Title, resolvedSymbol))
+                {
+                    resolvedName = markdownProfile.Title;
+                }
+            }
+        }
+
+        var orderedKlines = new List<StockKline>();
+        var requiresKlineBackfill = (snapshot.High52Week <= 0 || snapshot.Low52Week <= 0 || snapshot.AvgVolume <= 0)
+            && !IsAStockSymbol(resolvedSymbol);
+        if (requiresKlineBackfill)
+        {
+            var dailyKlines = await GetKlineAsync(resolvedSymbol, "D", count: 160);
+            orderedKlines = dailyKlines
+                .Where(k => k.Timestamp != default)
+                .OrderBy(k => k.Timestamp)
+                .ToList();
+        }
 
         var latestKline = orderedKlines.LastOrDefault();
         var previousClose = quote?.PreviousClose ?? 0;
@@ -794,10 +986,10 @@ public class LongBridgeService : ILongBridgeService
         }
 
         var currentPrice = quote?.Price ?? latestKline?.Close ?? 0;
-        var open = quote?.Open ?? latestKline?.Open ?? 0;
-        var high = quote?.High ?? latestKline?.High ?? 0;
-        var low = quote?.Low ?? latestKline?.Low ?? 0;
-        var volume = quote?.Volume ?? latestKline?.Volume ?? 0;
+        var open = quote?.Open > 0 ? quote.Open : (latestKline?.Open ?? 0);
+        var high = quote?.High > 0 ? quote.High : (latestKline?.High ?? 0);
+        var low = quote?.Low > 0 ? quote.Low : (latestKline?.Low ?? 0);
+        var volume = quote?.Volume > 0 ? quote.Volume : (latestKline?.Volume ?? 0);
 
         decimal change = 0;
         decimal changePercent = 0;
@@ -825,6 +1017,34 @@ public class LongBridgeService : ILongBridgeService
             }
         }
 
+        var marketCap = snapshot.MarketCap;
+        if (marketCap <= 0 && currentPrice > 0 && (staticInfo?.TotalShares ?? 0) > 0)
+        {
+            marketCap = currentPrice * staticInfo!.TotalShares;
+        }
+
+        var eps = snapshot.Eps;
+        if (eps <= 0)
+        {
+            eps = staticInfo?.EpsTtm > 0
+                ? staticInfo.EpsTtm
+                : (staticInfo?.Eps > 0 ? staticInfo.Eps : 0);
+        }
+
+        var pe = snapshot.Pe;
+        if (pe <= 0 && eps > 0 && currentPrice > 0)
+        {
+            pe = currentPrice / eps;
+        }
+
+        var dividendYield = snapshot.DividendYield > 0
+            ? snapshot.DividendYield
+            : (staticInfo?.DividendYield ?? 0);
+
+        var updatedAt = quote?.Timestamp is { } quoteTimestamp && quoteTimestamp > UnknownQuoteTimestamp
+            ? quoteTimestamp
+            : (latestKline?.Timestamp ?? DateTime.UtcNow);
+
         var hasValidMarketData = currentPrice > 0
             || previousClose > 0
             || open > 0
@@ -834,7 +1054,7 @@ public class LongBridgeService : ILongBridgeService
             || high52Week > 0
             || low52Week > 0
             || avgVolume > 0
-            || snapshot.MarketCap > 0;
+            || marketCap > 0;
 
         if (!hasValidMarketData)
         {
@@ -845,8 +1065,9 @@ public class LongBridgeService : ILongBridgeService
         return new Stock
         {
             Symbol = resolvedSymbol,
-            Name = string.IsNullOrWhiteSpace(stockMeta.Name) ? resolvedSymbol : stockMeta.Name,
-            Market = string.IsNullOrWhiteSpace(stockMeta.Market) ? InferMarketFromSymbol(resolvedSymbol) : stockMeta.Market,
+            Name = resolvedName,
+            Market = resolvedMarket,
+            Currency = resolvedCurrency,
             CurrentPrice = currentPrice,
             PreviousClose = previousClose,
             Open = open,
@@ -855,14 +1076,14 @@ public class LongBridgeService : ILongBridgeService
             Volume = volume,
             Change = change,
             ChangePercent = changePercent,
-            MarketCap = snapshot.MarketCap,
+            MarketCap = marketCap,
             High52Week = high52Week,
             Low52Week = low52Week,
             AvgVolume = avgVolume,
-            Pe = snapshot.Pe,
-            Eps = snapshot.Eps,
-            Dividend = snapshot.DividendYield,
-            LastUpdated = DateTime.UtcNow
+            Pe = pe,
+            Eps = eps,
+            Dividend = dividendYield,
+            LastUpdated = updatedAt
         };
     }
 
@@ -874,22 +1095,53 @@ public class LongBridgeService : ILongBridgeService
             return new List<Stock>();
         }
 
-        var allCandidates = new List<Stock>();
-        foreach (var market in GetCandidateMarkets(normalizedKeyword))
+        var results = new List<Stock>();
+
+        StaticSecurityInfo? staticInfo = null;
+        if (LooksLikeSymbolKeyword(normalizedKeyword))
         {
-            var securities = await GetMarketSecuritiesAsync(market);
-            if (securities.Count > 0)
+            var inferredSymbol = NormalizeSymbol(normalizedKeyword);
+            if (!IsAStockSymbol(inferredSymbol))
             {
-                allCandidates.AddRange(securities);
+                staticInfo = await GetStaticSecurityInfoAsync(inferredSymbol);
+            }
+        }
+        if (staticInfo != null)
+        {
+            results.Add(new Stock
+            {
+                Symbol = staticInfo.Symbol,
+                Name = staticInfo.Name,
+                Market = staticInfo.Market,
+                Currency = ResolveCurrencyCode(staticInfo.Currency, staticInfo.Market)
+            });
+        }
+
+        var cnFallback = await SearchAStockByEastMoneyAsync(normalizedKeyword);
+        if (cnFallback.Count > 0)
+        {
+            results.AddRange(cnFallback);
+        }
+
+        var candidateMarkets = GetCandidateMarkets(normalizedKeyword)
+            .Select(NormalizeMarketCode)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (candidateMarkets.Contains("US"))
+        {
+            // LongBridge 文档中 get_security_list 仅支持美股夜盘，避免对 SH/SZ/HK 调用导致 param_error。
+            var usSecurities = await GetMarketSecuritiesAsync("US");
+            if (usSecurities.Count > 0)
+            {
+                results.AddRange(usSecurities.Where(item => IsKeywordMatch(item, normalizedKeyword)));
             }
         }
 
-        var results = allCandidates
-            .Where(s => IsKeywordMatch(s, normalizedKeyword))
-            .GroupBy(s => s.Symbol, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.First())
-            .OrderBy(s => GetMatchScore(s, normalizedKeyword))
-            .ThenBy(s => s.Symbol)
+        results = results
+            .Where(item => !string.IsNullOrWhiteSpace(item.Symbol))
+            .GroupBy(item => item.Symbol, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(item => GetMatchScore(item, normalizedKeyword))
+            .ThenBy(item => item.Symbol)
             .Take(20)
             .ToList();
 
@@ -898,7 +1150,634 @@ public class LongBridgeService : ILongBridgeService
             return results;
         }
 
+        if (staticInfo != null)
+        {
+            return
+            [
+                new Stock
+                {
+                    Symbol = staticInfo.Symbol,
+                    Name = staticInfo.Name,
+                    Market = staticInfo.Market,
+                    Currency = ResolveCurrencyCode(staticInfo.Currency, staticInfo.Market)
+                }
+            ];
+        }
+
         return new List<Stock>();
+    }
+
+    public async Task<LongBridgeCompanyProfile?> GetCompanyProfileAsync(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        if (_companyProfileCache.TryGetValue(normalized, out var cached)
+            && DateTime.UtcNow - cached.FetchedAtUtc < CompanyProfileCacheDuration)
+        {
+            return cached.Profile;
+        }
+
+        var stock = await GetStockInfoAsync(normalized);
+        if (stock == null)
+        {
+            return null;
+        }
+
+        string overview = $"{stock.Name}（{stock.Symbol}）的实时行情已接入 Longbridge，支持在本页面查看行情、K线、交易与 AI 分析。";
+        string sourceUrl = string.Empty;
+        var fields = new List<KeyValuePair<string, string>>
+        {
+            new("代码", stock.Symbol),
+            new("名称", stock.Name),
+            new("市场", stock.Market),
+            new("币种", ResolveCurrencyCode(stock.Currency, stock.Market)),
+            new("现价", stock.CurrentPrice > 0 ? stock.CurrentPrice.ToString("F2", CultureInfo.InvariantCulture) : "-"),
+            new("涨跌幅", $"{stock.ChangePercent:+0.00;-0.00;0.00}%"),
+            new("开盘", stock.Open > 0 ? stock.Open.ToString("F2", CultureInfo.InvariantCulture) : "-"),
+            new("最高", stock.High > 0 ? stock.High.ToString("F2", CultureInfo.InvariantCulture) : "-"),
+            new("最低", stock.Low > 0 ? stock.Low.ToString("F2", CultureInfo.InvariantCulture) : "-"),
+            new("昨收", stock.PreviousClose > 0 ? stock.PreviousClose.ToString("F2", CultureInfo.InvariantCulture) : "-"),
+            new("成交量", stock.Volume > 0 ? stock.Volume.ToString("N0", CultureInfo.InvariantCulture) : "-"),
+            new("市值", stock.MarketCap > 0 ? stock.MarketCap.ToString("F2", CultureInfo.InvariantCulture) : "-"),
+            new("市盈率", stock.Pe > 0 ? stock.Pe.ToString("F2", CultureInfo.InvariantCulture) : "-"),
+            new("每股收益", stock.Eps > 0 ? stock.Eps.ToString("F2", CultureInfo.InvariantCulture) : "-"),
+            new("股息率", stock.Dividend > 0 ? $"{stock.Dividend:F2}%" : "-"),
+            new("52周区间", stock.High52Week > 0 && stock.Low52Week > 0
+                ? $"{stock.Low52Week:F2} - {stock.High52Week:F2}"
+                : "-"),
+            new("行情时间", stock.LastUpdated == default
+                ? "-"
+                : stock.LastUpdated.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss 'UTC'", CultureInfo.InvariantCulture))
+        };
+
+        var markdown = await TryFetchCompanyMarkdownAsync(normalized);
+        if (markdown != null)
+        {
+            if (!string.IsNullOrWhiteSpace(markdown.Title) && !IsPoorDisplayName(markdown.Title, normalized))
+            {
+                stock.Name = markdown.Title;
+            }
+
+            if (!string.IsNullOrWhiteSpace(markdown.Overview))
+            {
+                overview = markdown.Overview;
+            }
+
+            sourceUrl = markdown.SourceUrl;
+            foreach (var item in markdown.Fields)
+            {
+                if (!string.IsNullOrWhiteSpace(item.Key) && !string.IsNullOrWhiteSpace(item.Value))
+                {
+                    fields.Add(item);
+                }
+            }
+        }
+
+        var profile = new LongBridgeCompanyProfile
+        {
+            Symbol = stock.Symbol,
+            Name = stock.Name,
+            Overview = overview,
+            SourceUrl = sourceUrl,
+            Fields = fields
+                .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList()
+        };
+
+        _companyProfileCache[normalized] = new CachedCompanyProfile(DateTime.UtcNow, profile);
+        return profile;
+    }
+
+    private async Task<StaticSecurityInfo?> GetStaticSecurityInfoAsync(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var list = await GetStaticSecurityInfosAsync([normalized]);
+        return list.FirstOrDefault(item => SymbolEquals(item.Symbol, normalized));
+    }
+
+    private async Task<List<StaticSecurityInfo>> GetStaticSecurityInfosAsync(IEnumerable<string> symbols)
+    {
+        var normalizedSymbols = symbols
+            .Select(NormalizeSymbol)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(50)
+            .ToList();
+
+        if (!normalizedSymbols.Any())
+        {
+            return new List<StaticSecurityInfo>();
+        }
+
+        var query = string.Join("&", normalizedSymbols.Select(item => $"symbol={Uri.EscapeDataString(item)}"));
+        var response = await SendRequestWithFallbackPathsAsync(
+            [
+                $"/v1/quote/static_info?{query}",
+                $"/v1/quote/static?{query}",
+                $"/quote/static_info?{query}",
+                $"/quote/static?{query}"
+            ],
+            HttpMethod.Get);
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return new List<StaticSecurityInfo>();
+        }
+
+        try
+        {
+            var json = JObject.Parse(response);
+            var rows = json["data"]?["secu_static_info"] as JArray
+                ?? json["data"]?["security_static_info"] as JArray
+                ?? json["data"]?["list"] as JArray
+                ?? json["data"] as JArray
+                ?? json["secu_static_info"] as JArray
+                ?? json["security_static_info"] as JArray
+                ?? json["list"] as JArray;
+
+            if (rows == null)
+            {
+                return new List<StaticSecurityInfo>();
+            }
+
+            var result = new List<StaticSecurityInfo>();
+            foreach (var item in rows)
+            {
+                var symbol = NormalizeSymbol(item["symbol"]?.ToString() ?? string.Empty);
+                if (string.IsNullOrWhiteSpace(symbol))
+                {
+                    continue;
+                }
+
+                var name = item["name_cn"]?.ToString()
+                    ?? item["name_zh"]?.ToString()
+                    ?? item["name_hk"]?.ToString()
+                    ?? item["name_en"]?.ToString()
+                    ?? item["name"]?.ToString()
+                    ?? symbol;
+                var market = InferMarketFromSymbol(symbol, item["market"]?.ToString() ?? string.Empty);
+                var currency = item["currency"]?.ToString();
+
+                result.Add(new StaticSecurityInfo
+                {
+                    Symbol = symbol,
+                    Name = string.IsNullOrWhiteSpace(name) ? symbol : name.Trim(),
+                    Market = string.IsNullOrWhiteSpace(market) ? InferMarketFromSymbol(symbol) : market,
+                    Currency = ResolveCurrencyCode(currency, market),
+                    TotalShares = ParseLongToken(item["total_shares"]),
+                    CirculatingShares = ParseLongToken(item["circulating_shares"]),
+                    Eps = ParseDecimalToken(item["eps"]),
+                    EpsTtm = ParseDecimalToken(item["eps_ttm"]),
+                    DividendYield = ParseDecimalToken(item["dividend_yield"])
+                });
+            }
+
+            return result
+                .GroupBy(item => item.Symbol, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse static info response for symbols: {Symbols}", string.Join(",", normalizedSymbols));
+            return new List<StaticSecurityInfo>();
+        }
+    }
+
+    private async Task<string> ResolveDisplayNameAsync(string symbol, string? fallbackName, StaticSecurityInfo? staticInfo = null)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var firstCandidate = staticInfo?.Name;
+        if (!IsPoorDisplayName(firstCandidate, normalized))
+        {
+            return firstCandidate!.Trim();
+        }
+
+        if (!IsPoorDisplayName(fallbackName, normalized))
+        {
+            return fallbackName!.Trim();
+        }
+
+        var markdownTitle = await TryGetCompanyTitleFromMarkdownAsync(normalized);
+        if (!IsPoorDisplayName(markdownTitle, normalized))
+        {
+            return markdownTitle!;
+        }
+
+        var pageTitle = await TryGetCompanyTitleFromQuotePageAsync(normalized);
+        if (!IsPoorDisplayName(pageTitle, normalized))
+        {
+            return pageTitle!;
+        }
+
+        var cnName = await TryResolveAStockNameBySymbolAsync(normalized);
+        if (!IsPoorDisplayName(cnName, normalized))
+        {
+            return cnName!;
+        }
+
+        return normalized.Split('.').FirstOrDefault() ?? normalized;
+    }
+
+    private async Task<string?> TryGetCompanyTitleFromMarkdownAsync(string symbol)
+    {
+        var markdown = await TryFetchCompanyMarkdownAsync(symbol);
+        return markdown?.Title;
+    }
+
+    private async Task<string?> TryGetCompanyTitleFromQuotePageAsync(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        foreach (var locale in LongbridgeQuotePageLocales)
+        {
+            var url = $"https://longbridge.com/{locale}/quote/{Uri.EscapeDataString(normalized)}";
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.UserAgent.ParseAdd("QuantTrading/1.0");
+                request.Headers.AcceptLanguage.ParseAdd(locale);
+
+                var response = await client.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var html = await response.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(html))
+                {
+                    continue;
+                }
+
+                var titleMatch = Regex.Match(html, @"<title>(?<title>.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                if (!titleMatch.Success)
+                {
+                    continue;
+                }
+
+                var decoded = WebUtility.HtmlDecode(titleMatch.Groups["title"].Value);
+                var normalizedTitle = NormalizeCompanyTitle(decoded, normalized);
+                if (!string.IsNullOrWhiteSpace(normalizedTitle))
+                {
+                    return normalizedTitle;
+                }
+            }
+            catch
+            {
+                // ignore locale fallback errors
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<MarkdownCompanyProfile?> TryFetchCompanyMarkdownAsync(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        foreach (var locale in LongbridgeQuotePageLocales)
+        {
+            var url = $"https://longbridge.com/{locale}/quote/{Uri.EscapeDataString(normalized)}.md";
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/markdown"));
+                var response = await client.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var markdown = await response.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(markdown))
+                {
+                    continue;
+                }
+
+                var title = ExtractCompanyTitleFromMarkdown(markdown, normalized);
+                var overview = ExtractCompanyOverviewFromMarkdown(markdown);
+                var fields = ExtractCompanyFieldsFromMarkdown(markdown);
+                return new MarkdownCompanyProfile
+                {
+                    Title = title,
+                    Overview = overview,
+                    SourceUrl = url,
+                    Fields = fields
+                };
+            }
+            catch
+            {
+                // ignore locale fallback errors
+            }
+        }
+
+        return null;
+    }
+
+    private static void ApplySnapshotFieldsFromMarkdown(StockSnapshot snapshot, IEnumerable<KeyValuePair<string, string>> fields)
+    {
+        foreach (var field in fields)
+        {
+            var key = (field.Key ?? string.Empty).Trim();
+            var value = (field.Value ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value) || value == "-")
+            {
+                continue;
+            }
+
+            if ((key.Contains("市值", StringComparison.OrdinalIgnoreCase)
+                    || key.Contains("market cap", StringComparison.OrdinalIgnoreCase))
+                && snapshot.MarketCap <= 0)
+            {
+                snapshot.MarketCap = ParseScaledDecimalValue(value);
+                continue;
+            }
+
+            if ((key.Contains("市盈率", StringComparison.OrdinalIgnoreCase)
+                    || key.Contains("PE", StringComparison.OrdinalIgnoreCase))
+                && snapshot.Pe <= 0)
+            {
+                snapshot.Pe = ParseFirstDecimalValue(value);
+                continue;
+            }
+
+            if ((key.Contains("每股收益", StringComparison.OrdinalIgnoreCase)
+                    || key.Contains("EPS", StringComparison.OrdinalIgnoreCase))
+                && snapshot.Eps <= 0)
+            {
+                snapshot.Eps = ParseFirstDecimalValue(value);
+                continue;
+            }
+
+            if ((key.Contains("股息率", StringComparison.OrdinalIgnoreCase)
+                    || key.Contains("Dividend", StringComparison.OrdinalIgnoreCase))
+                && snapshot.DividendYield <= 0)
+            {
+                snapshot.DividendYield = ParsePercentValue(value);
+                continue;
+            }
+
+            if ((key.Contains("52周区间", StringComparison.OrdinalIgnoreCase)
+                    || key.Contains("52 Week", StringComparison.OrdinalIgnoreCase))
+                && (snapshot.High52Week <= 0 || snapshot.Low52Week <= 0))
+            {
+                if (TryParseRangePair(value, out var low, out var high))
+                {
+                    snapshot.Low52Week = snapshot.Low52Week > 0 ? snapshot.Low52Week : low;
+                    snapshot.High52Week = snapshot.High52Week > 0 ? snapshot.High52Week : high;
+                }
+                continue;
+            }
+
+            if ((key.Contains("52周最高", StringComparison.OrdinalIgnoreCase)
+                    || key.Contains("52-week high", StringComparison.OrdinalIgnoreCase))
+                && snapshot.High52Week <= 0)
+            {
+                snapshot.High52Week = ParseFirstDecimalValue(value);
+                continue;
+            }
+
+            if ((key.Contains("52周最低", StringComparison.OrdinalIgnoreCase)
+                    || key.Contains("52-week low", StringComparison.OrdinalIgnoreCase))
+                && snapshot.Low52Week <= 0)
+            {
+                snapshot.Low52Week = ParseFirstDecimalValue(value);
+                continue;
+            }
+
+            if ((key.Contains("平均成交量", StringComparison.OrdinalIgnoreCase)
+                    || key.Contains("avg volume", StringComparison.OrdinalIgnoreCase))
+                && snapshot.AvgVolume <= 0)
+            {
+                snapshot.AvgVolume = ParseLongValue(value);
+            }
+        }
+    }
+
+    private static bool TryParseRangePair(string value, out decimal low, out decimal high)
+    {
+        low = 0;
+        high = 0;
+        var text = StripHtml(value);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var matches = NumberTokenRegex.Matches(text);
+        if (matches.Count < 2)
+        {
+            return false;
+        }
+
+        var first = ParseFlexibleDecimalToken(matches[0].Value);
+        var second = ParseFlexibleDecimalToken(matches[1].Value);
+        if (first <= 0 || second <= 0)
+        {
+            return false;
+        }
+
+        low = Math.Min(first, second);
+        high = Math.Max(first, second);
+        return true;
+    }
+
+    private static string ExtractCompanyTitleFromMarkdown(string markdown, string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return symbol;
+        }
+
+        var titleMatch = FrontmatterTitleRegex.Match(markdown);
+        if (titleMatch.Success)
+        {
+            var title = NormalizeCompanyTitle(titleMatch.Groups["title"].Value, symbol);
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                return title;
+            }
+        }
+
+        var headingMatch = MarkdownHeadingRegex.Match(markdown);
+        if (headingMatch.Success)
+        {
+            var title = NormalizeCompanyTitle(headingMatch.Groups["title"].Value, symbol);
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                return title;
+            }
+        }
+
+        return symbol.Split('.').FirstOrDefault() ?? symbol;
+    }
+
+    private static string ExtractCompanyOverviewFromMarkdown(string markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return string.Empty;
+        }
+
+        var lines = markdown.Split('\n');
+        var start = Array.FindIndex(lines, line =>
+            Regex.IsMatch(line.Trim(), @"^##\s*(公司概览|公司概況|公司概况|公司簡介|Company Overview)", RegexOptions.IgnoreCase));
+        var begin = start >= 0 ? start + 1 : 0;
+        var end = lines.Length;
+        for (var i = begin; i < lines.Length; i++)
+        {
+            if (lines[i].TrimStart().StartsWith("## ", StringComparison.Ordinal))
+            {
+                end = i;
+                break;
+            }
+        }
+
+        var chunk = string.Join('\n', lines[begin..end]);
+        var plain = Regex.Replace(chunk, @"\|.*\|", string.Empty);
+        plain = Regex.Replace(plain, @"[`*_>#-]", " ");
+        plain = Regex.Replace(plain, @"\s+", " ").Trim();
+        return plain;
+    }
+
+    private static List<KeyValuePair<string, string>> ExtractCompanyFieldsFromMarkdown(string markdown)
+    {
+        var fields = new List<KeyValuePair<string, string>>();
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return fields;
+        }
+
+        var lines = markdown.Split('\n');
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (!trimmed.StartsWith('|') || !trimmed.EndsWith('|'))
+            {
+                continue;
+            }
+
+            var parts = trimmed
+                .Split('|', StringSplitOptions.RemoveEmptyEntries)
+                .Select(item => item.Trim())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .ToList();
+            if (parts.Count < 2)
+            {
+                continue;
+            }
+
+            var key = Regex.Replace(parts[0], @"[`*_]", string.Empty).Trim();
+            var value = Regex.Replace(parts[1], @"[`*_]", string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            if (key is "项目" or "指标" or "Item" or "Detail" || key.All(ch => ch == '-'))
+            {
+                continue;
+            }
+
+            fields.Add(new KeyValuePair<string, string>(key, value));
+            if (fields.Count >= 16)
+            {
+                break;
+            }
+        }
+
+        return fields;
+    }
+
+    private static string NormalizeCompanyTitle(string rawTitle, string symbol)
+    {
+        var title = (rawTitle ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return string.Empty;
+        }
+
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        var baseSymbol = normalizedSymbol.Split('.').FirstOrDefault() ?? normalizedSymbol;
+
+        title = title
+            .Replace(normalizedSymbol, string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace(baseSymbol, string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("()", string.Empty, StringComparison.Ordinal)
+            .Replace("（）", string.Empty, StringComparison.Ordinal)
+            .Trim();
+
+        title = Regex.Replace(title, @"[\(\[（【].*?[\)\]）】]", string.Empty).Trim();
+        title = title.Replace("Longbridge", string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+        title = title.Trim('-', '—', '|', ':', '：', ' ');
+        return title;
+    }
+
+    private static bool IsPoorDisplayName(string? value, string symbol)
+    {
+        var name = (value ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return true;
+        }
+
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        var baseSymbol = normalizedSymbol.Split('.').FirstOrDefault() ?? normalizedSymbol;
+        if (name.Equals(normalizedSymbol, StringComparison.OrdinalIgnoreCase)
+            || name.Equals(baseSymbol, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(name, @"^\d{4,6}$"))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string ResolveCurrencyCode(string? currency, string? market)
+    {
+        var normalized = (currency ?? string.Empty).Trim().ToUpperInvariant();
+        if (!string.IsNullOrWhiteSpace(normalized))
+        {
+            return normalized;
+        }
+
+        var marketCode = NormalizeMarketCode(market);
+        return marketCode switch
+        {
+            "HK" => "HKD",
+            "SH" or "SZ" => "CNY",
+            "SG" => "SGD",
+            _ => "USD"
+        };
     }
 
     private async Task<List<Stock>> GetMarketSecuritiesAsync(string market)
@@ -942,45 +1821,36 @@ public class LongBridgeService : ILongBridgeService
     private async Task<List<Stock>> FetchMarketSecuritiesAsync(string market)
     {
         var result = new List<Stock>();
+        var normalizedMarket = NormalizeMarketCode(market);
+        if (!normalizedMarket.Equals("US", StringComparison.OrdinalIgnoreCase))
+        {
+            return result;
+        }
+
         try
         {
-            var response = await SendRequestAsync($"/v1/quote/get_security_list?market={market}&category=Overnight", HttpMethod.Get);
-            if (string.IsNullOrWhiteSpace(response))
+            foreach (var category in GetSecurityListCategories(normalizedMarket))
             {
-                return result;
-            }
-
-            var json = JObject.Parse(response);
-            var list = json["data"]?["list"] as JArray
-                ?? json["data"] as JArray
-                ?? json["list"] as JArray;
-
-            if (list == null)
-            {
-                return result;
-            }
-
-            foreach (var item in list)
-            {
-                var symbol = (item["symbol"]?.ToString() ?? string.Empty).Trim().ToUpperInvariant();
-                if (string.IsNullOrWhiteSpace(symbol))
+                var response = await SendRequestAsync($"/v1/quote/get_security_list?market={normalizedMarket}&category={Uri.EscapeDataString(category)}", HttpMethod.Get);
+                if (string.IsNullOrWhiteSpace(response))
                 {
                     continue;
                 }
 
-                var name = item["name"]?.ToString()
-                    ?? item["name_cn"]?.ToString()
-                    ?? item["name_en"]?.ToString()
-                    ?? item["name_zh"]?.ToString()
-                    ?? item["name_hk"]?.ToString()
-                    ?? symbol;
-
-                result.Add(new Stock
+                var chunk = ParseSecurityListResponse(response, market);
+                if (chunk.Count > 0)
                 {
-                    Symbol = symbol,
-                    Name = string.IsNullOrWhiteSpace(name) ? symbol : name,
-                    Market = InferMarketFromSymbol(symbol, market)
-                });
+                    result.AddRange(chunk);
+                }
+            }
+
+            if (result.Count == 0)
+            {
+                var fallback = await SendRequestAsync($"/v1/quote/get_security_list?market={normalizedMarket}", HttpMethod.Get);
+                if (!string.IsNullOrWhiteSpace(fallback))
+                {
+                    result.AddRange(ParseSecurityListResponse(fallback, normalizedMarket));
+                }
             }
         }
         catch (Exception ex)
@@ -988,7 +1858,218 @@ public class LongBridgeService : ILongBridgeService
             _logger.LogWarning(ex, "Failed to load security list for market {Market}", market);
         }
 
+        return result
+            .GroupBy(item => item.Symbol, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private static IEnumerable<string> GetSecurityListCategories(string market)
+    {
+        _ = market;
+        return ["Overnight"];
+    }
+
+    private List<Stock> ParseSecurityListResponse(string response, string market)
+    {
+        var result = new List<Stock>();
+
+        var json = JObject.Parse(response);
+        var list = json["data"]?["secu_list"] as JArray
+            ?? json["data"]?["list"] as JArray
+            ?? json["data"] as JArray
+            ?? json["secu_list"] as JArray
+            ?? json["list"] as JArray;
+
+        if (list == null)
+        {
+            return result;
+        }
+
+        foreach (var item in list)
+        {
+            var symbol = (item["symbol"]?.ToString() ?? string.Empty).Trim().ToUpperInvariant();
+            if (string.IsNullOrWhiteSpace(symbol))
+            {
+                continue;
+            }
+
+            var name = item["name"]?.ToString()
+                ?? item["name_cn"]?.ToString()
+                ?? item["name_en"]?.ToString()
+                ?? item["name_zh"]?.ToString()
+                ?? item["name_hk"]?.ToString()
+                ?? symbol;
+
+            result.Add(new Stock
+            {
+                Symbol = symbol,
+                Name = string.IsNullOrWhiteSpace(name) ? symbol : name,
+                Market = InferMarketFromSymbol(symbol, market)
+            });
+        }
+
         return result;
+    }
+
+    private async Task<List<Stock>> SearchAStockByEastMoneyAsync(string keyword)
+    {
+        var query = (keyword ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return new List<Stock>();
+        }
+
+        if (query.StartsWith("SH", StringComparison.OrdinalIgnoreCase)
+            || query.StartsWith("SZ", StringComparison.OrdinalIgnoreCase))
+        {
+            var maybeCode = query.Length >= 8 ? query[2..8] : query;
+            if (maybeCode.Length == 6 && maybeCode.All(char.IsDigit))
+            {
+                query = maybeCode;
+            }
+        }
+
+        if (query.Contains('.', StringComparison.Ordinal))
+        {
+            var head = query.Split('.', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? query;
+            if (head.Length == 6 && head.All(char.IsDigit))
+            {
+                query = head;
+            }
+        }
+
+        var encoded = Uri.EscapeDataString(query);
+        var url = $"{EastMoneySuggestUrl}?input={encoded}&type=14&token={EastMoneySuggestToken}";
+
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.UserAgent.ParseAdd("QuantTrading/1.0");
+            var response = await client.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                return new List<Stock>();
+            }
+
+            var raw = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return new List<Stock>();
+            }
+
+            var json = JObject.Parse(raw);
+            var rows = json["QuotationCodeTable"]?["Data"] as JArray;
+            if (rows == null)
+            {
+                return new List<Stock>();
+            }
+
+            return rows
+                .Select(item =>
+                {
+                    var code = (item["Code"]?.ToString() ?? string.Empty).Trim();
+                    if (string.IsNullOrWhiteSpace(code) || !code.All(char.IsDigit) || code.Length != 6)
+                    {
+                        return null;
+                    }
+
+                    var market = ResolveAStockMarket(item);
+                    if (string.IsNullOrWhiteSpace(market))
+                    {
+                        return null;
+                    }
+
+                    var symbol = $"{code}.{market}";
+                    var name = (item["Name"]?.ToString() ?? string.Empty).Trim();
+                    if (string.IsNullOrWhiteSpace(name))
+                    {
+                        return null;
+                    }
+
+                    return new Stock
+                    {
+                        Symbol = symbol,
+                        Name = name,
+                        Market = market,
+                        Currency = "CNY"
+                    };
+                })
+                .Where(item => item != null)
+                .Cast<Stock>()
+                .DistinctBy(item => item.Symbol, StringComparer.OrdinalIgnoreCase)
+                .Take(20)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "EastMoney fallback search failed for keyword {Keyword}", query);
+            return new List<Stock>();
+        }
+    }
+
+    private async Task<string?> TryResolveAStockNameBySymbolAsync(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var market = InferMarketFromSymbol(normalized);
+        if (market is not ("SH" or "SZ"))
+        {
+            return null;
+        }
+
+        var code = normalized.Split('.').FirstOrDefault() ?? normalized;
+        if (string.IsNullOrWhiteSpace(code) || code.Length != 6 || !code.All(char.IsDigit))
+        {
+            return null;
+        }
+
+        var rows = await SearchAStockByEastMoneyAsync(code);
+        var matched = rows.FirstOrDefault(item => SymbolEquals(item.Symbol, normalized))
+            ?? rows.FirstOrDefault(item => item.Symbol.StartsWith($"{code}.", StringComparison.OrdinalIgnoreCase));
+        return matched?.Name;
+    }
+
+    private static string ResolveAStockMarket(JToken item)
+    {
+        var explicitMarket = (item["MktNum"]?.ToString() ?? string.Empty).Trim();
+        if (explicitMarket == "1")
+        {
+            return "SH";
+        }
+
+        if (explicitMarket == "0")
+        {
+            return "SZ";
+        }
+
+        var typeName = (item["SecurityTypeName"]?.ToString() ?? string.Empty).Trim();
+        if (typeName.Contains("沪", StringComparison.Ordinal))
+        {
+            return "SH";
+        }
+
+        if (typeName.Contains("深", StringComparison.Ordinal))
+        {
+            return "SZ";
+        }
+
+        var code = (item["Code"]?.ToString() ?? string.Empty).Trim();
+        if (code.Length == 6 && code.All(char.IsDigit))
+        {
+            return code.StartsWith("6", StringComparison.Ordinal)
+                || code.StartsWith("9", StringComparison.Ordinal)
+                || code.StartsWith("5", StringComparison.Ordinal)
+                ? "SH"
+                : "SZ";
+        }
+
+        return string.Empty;
     }
 
     private static IEnumerable<string> GetCandidateMarkets(string keyword)
@@ -1151,6 +2232,545 @@ public class LongBridgeService : ILongBridgeService
         var leftBase = normalizedLeft.Split('.').FirstOrDefault() ?? normalizedLeft;
         var rightBase = normalizedRight.Split('.').FirstOrDefault() ?? normalizedRight;
         return leftBase.Equals(rightBase, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeSymbolKeyword(string keyword)
+    {
+        var normalized = (keyword ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        if (Regex.IsMatch(normalized, @"^(SH|SZ)\d{6}$"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(normalized, @"^[A-Z0-9]{1,12}(\.(US|HK|SH|SZ|SG|CN))?$"))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task<StockQuote?> GetQuoteFromLongbridgePageAsync(string symbol)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalizedSymbol))
+        {
+            return null;
+        }
+
+        DateTime? snapshotTimestamp = null;
+        foreach (var locale in LongbridgeQuotePageLocales)
+        {
+            var url = $"https://longbridge.com/{locale}/quote/{Uri.EscapeDataString(normalizedSymbol)}";
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.UserAgent.ParseAdd("QuantTrading/1.0");
+                request.Headers.AcceptLanguage.ParseAdd(locale);
+
+                var response = await client.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var html = await response.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(html))
+                {
+                    continue;
+                }
+
+                var jsonMatch = Regex.Match(
+                    html,
+                    "<script id=\"__NEXT_DATA__\" type=\"application/json\">(?<json>.*?)</script>",
+                    RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                if (!jsonMatch.Success)
+                {
+                    continue;
+                }
+
+                var nextData = JObject.Parse(WebUtility.HtmlDecode(jsonMatch.Groups["json"].Value));
+                var pageProps = nextData["props"]?["pageProps"];
+                var quoteNode = TryFindQuoteNodeForSymbol(pageProps, normalizedSymbol);
+                if (quoteNode == null)
+                {
+                    continue;
+                }
+
+                var price = ParseDecimalToken(quoteNode["last_done"]);
+                if (price <= 0)
+                {
+                    price = ParseDecimalToken(quoteNode["lastDone"]);
+                }
+
+                if (price <= 0)
+                {
+                    continue;
+                }
+
+                var previousClose = ParseDecimalToken(quoteNode["prev_close"]);
+                if (previousClose <= 0)
+                {
+                    previousClose = ParseDecimalToken(quoteNode["prevClose"]);
+                }
+
+                var changePercent = NormalizeChangePercent(ParseDecimalToken(quoteNode["change"]));
+                if (changePercent == 0)
+                {
+                    changePercent = ParseDecimalToken(quoteNode["change_rate"]);
+                }
+
+                if (previousClose <= 0 && changePercent > -99.9m && changePercent < 1000m)
+                {
+                    var ratio = 1 + changePercent / 100m;
+                    if (ratio > 0)
+                    {
+                        previousClose = price / ratio;
+                    }
+                }
+
+                var change = previousClose > 0 ? price - previousClose : 0;
+                var timestamp = ParseQuoteTimestamp(quoteNode["timestamp"]);
+                if (timestamp <= DateTime.UnixEpoch)
+                {
+                    snapshotTimestamp ??= await TryGetLongbridgeQuoteSnapshotTimeAsync(normalizedSymbol, locale);
+                    timestamp = snapshotTimestamp ?? DateTime.UtcNow;
+                }
+
+                return new StockQuote
+                {
+                    Symbol = normalizedSymbol,
+                    Price = price,
+                    PreviousClose = previousClose,
+                    Change = change,
+                    ChangePercent = changePercent != 0
+                        ? changePercent
+                        : (previousClose > 0 ? change / previousClose * 100 : 0),
+                    Open = ParseDecimalToken(quoteNode["open"]),
+                    High = ParseDecimalToken(quoteNode["high"]),
+                    Low = ParseDecimalToken(quoteNode["low"]),
+                    Volume = ParseLongToken(quoteNode["volume"]),
+                    Turnover = ParseDecimalToken(quoteNode["turnover"]),
+                    Timestamp = timestamp
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse quote page JSON for {Symbol} ({Locale})", normalizedSymbol, locale);
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<DateTime?> TryGetLongbridgeQuoteSnapshotTimeAsync(string symbol, string? preferredLocale = null)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var locales = BuildLocaleCandidates(preferredLocale);
+        foreach (var locale in locales)
+        {
+            var url = $"https://longbridge.com/{locale}/quote/{Uri.EscapeDataString(normalized)}.md";
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/markdown"));
+                var response = await client.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var markdown = await response.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(markdown))
+                {
+                    continue;
+                }
+
+                var match = Regex.Match(markdown, "^datetime:\\s*\"(?<dt>[^\"]+)\"\\s*$", RegexOptions.Multiline);
+                if (!match.Success)
+                {
+                    continue;
+                }
+
+                if (DateTime.TryParse(
+                    match.Groups["dt"].Value.Trim(),
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var parsed))
+                {
+                    return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+                }
+            }
+            catch
+            {
+                // ignore markdown fallback errors
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> BuildLocaleCandidates(string? preferredLocale)
+    {
+        var preferred = (preferredLocale ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(preferred))
+        {
+            yield return preferred;
+        }
+
+        foreach (var locale in LongbridgeQuotePageLocales)
+        {
+            if (locale.Equals(preferred, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            yield return locale;
+        }
+    }
+
+    private static JObject? TryFindQuoteNodeForSymbol(JToken? token, string normalizedSymbol)
+    {
+        if (token == null)
+        {
+            return null;
+        }
+
+        if (token is JObject obj)
+        {
+            var candidate = NormalizeSymbolFromPageNode(obj);
+            var hasQuoteValue = ParseDecimalToken(obj["last_done"]) > 0
+                || ParseDecimalToken(obj["lastDone"]) > 0;
+            if (!string.IsNullOrWhiteSpace(candidate)
+                && SymbolEquals(candidate, normalizedSymbol)
+                && hasQuoteValue)
+            {
+                return obj;
+            }
+
+            foreach (var property in obj.Properties())
+            {
+                var found = TryFindQuoteNodeForSymbol(property.Value, normalizedSymbol);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+        }
+        else if (token is JArray array)
+        {
+            foreach (var item in array)
+            {
+                var found = TryFindQuoteNodeForSymbol(item, normalizedSymbol);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string NormalizeSymbolFromPageNode(JObject obj)
+    {
+        var stockCode = (obj["stockCode"]?.ToString() ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(stockCode))
+        {
+            return NormalizeSymbol(stockCode);
+        }
+
+        var ticker = (obj["ticker"]?.ToString() ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(ticker))
+        {
+            return NormalizeSymbol(ticker);
+        }
+
+        var counterId = (obj["counter_id"]?.ToString() ?? obj["counterId"]?.ToString() ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(counterId))
+        {
+            var match = Regex.Match(counterId.ToUpperInvariant(), @"ST/(?<market>US|HK|SH|SZ|SG|CN)/(?<code>[A-Z0-9]+)");
+            if (match.Success)
+            {
+                var market = match.Groups["market"].Value;
+                var code = match.Groups["code"].Value;
+                if (market == "CN" && code.All(char.IsDigit) && code.Length == 6)
+                {
+                    market = code.StartsWith("6", StringComparison.Ordinal)
+                        || code.StartsWith("9", StringComparison.Ordinal)
+                        || code.StartsWith("5", StringComparison.Ordinal)
+                        ? "SH"
+                        : "SZ";
+                }
+
+                return NormalizeSymbol($"{code}.{market}");
+            }
+        }
+
+        var symbolValue = (obj["symbol"]?.ToString() ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(symbolValue))
+        {
+            symbolValue = (obj["code"]?.ToString() ?? string.Empty).Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(symbolValue))
+        {
+            return string.Empty;
+        }
+
+        var marketHint = (obj["market"]?.ToString() ?? string.Empty).Trim().ToUpperInvariant();
+        if (marketHint == "CN" && symbolValue.All(char.IsDigit) && symbolValue.Length == 6)
+        {
+            marketHint = symbolValue.StartsWith("6", StringComparison.Ordinal)
+                || symbolValue.StartsWith("9", StringComparison.Ordinal)
+                || symbolValue.StartsWith("5", StringComparison.Ordinal)
+                ? "SH"
+                : "SZ";
+        }
+
+        if (!symbolValue.Contains('.') && !string.IsNullOrWhiteSpace(marketHint))
+        {
+            symbolValue = $"{symbolValue}.{marketHint}";
+        }
+
+        return NormalizeSymbol(symbolValue);
+    }
+
+    private static decimal NormalizeChangePercent(decimal raw)
+    {
+        if (raw == 0)
+        {
+            return 0;
+        }
+
+        return Math.Abs(raw) <= 1.5m ? raw * 100 : raw;
+    }
+
+    private static bool IsAStockSymbol(string? symbol)
+    {
+        var market = InferMarketFromSymbol(symbol ?? string.Empty);
+        return market is "SH" or "SZ";
+    }
+
+    private static bool TryBuildEastMoneySecId(string symbol, out string secId)
+    {
+        secId = string.Empty;
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        var parts = normalized.Split('.', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+        {
+            return false;
+        }
+
+        var code = parts[0];
+        var market = parts[1].ToUpperInvariant();
+        if (!Regex.IsMatch(code, @"^\d{6}$"))
+        {
+            return false;
+        }
+
+        secId = market switch
+        {
+            "SH" => $"1.{code}",
+            "SZ" => $"0.{code}",
+            _ => string.Empty
+        };
+
+        return !string.IsNullOrWhiteSpace(secId);
+    }
+
+    private async Task<EastMoneyQuoteSnapshot?> GetAStockQuoteSnapshotAsync(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (!IsAStockSymbol(normalized) || !TryBuildEastMoneySecId(normalized, out var secId))
+        {
+            return null;
+        }
+
+        var url = $"{EastMoneyQuoteUrl}?secid={Uri.EscapeDataString(secId)}&fields=f57,f58,f43,f44,f45,f46,f47,f48,f60,f169,f170,f116,f162";
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.UserAgent.ParseAdd("QuantTrading/1.0");
+            request.Headers.Referrer = new Uri("https://quote.eastmoney.com/");
+
+            using var response = await client.SendAsync(request);
+            var content = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode || string.IsNullOrWhiteSpace(content))
+            {
+                return null;
+            }
+
+            var json = JObject.Parse(content);
+            var data = json["data"] as JObject;
+            if (data == null)
+            {
+                return null;
+            }
+
+            var price = ParseEastMoneyScaledPrice(data["f43"]);
+            if (price <= 0)
+            {
+                return null;
+            }
+
+            var quoteTime = DateTime.UtcNow;
+            return new EastMoneyQuoteSnapshot
+            {
+                Symbol = normalized,
+                Name = data["f58"]?.ToString() ?? string.Empty,
+                Price = price,
+                Open = ParseEastMoneyScaledPrice(data["f46"]),
+                High = ParseEastMoneyScaledPrice(data["f44"]),
+                Low = ParseEastMoneyScaledPrice(data["f45"]),
+                PreviousClose = ParseEastMoneyScaledPrice(data["f60"]),
+                Change = ParseEastMoneyScaledPrice(data["f169"]),
+                ChangePercent = ParseEastMoneyScaledPrice(data["f170"]),
+                Volume = ParseEastMoneyVolume(data["f47"]),
+                Turnover = ParseDecimalToken(data["f48"]),
+                MarketCap = ParseDecimalToken(data["f116"]),
+                Pe = ParseEastMoneyScaledPrice(data["f162"]),
+                Timestamp = quoteTime
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch EastMoney quote snapshot for {Symbol}", normalized);
+            return null;
+        }
+    }
+
+    private static long ParseEastMoneyVolume(JToken? token)
+    {
+        var hands = ParseLongToken(token);
+        if (hands <= 0)
+        {
+            return 0;
+        }
+
+        try
+        {
+            return checked(hands * 100);
+        }
+        catch
+        {
+            return hands;
+        }
+    }
+
+    private static decimal ParseEastMoneyScaledPrice(JToken? token)
+    {
+        var raw = ParseDecimalToken(token);
+        if (raw == 0)
+        {
+            return 0;
+        }
+
+        if (decimal.Truncate(raw) == raw || Math.Abs(raw) >= 1000)
+        {
+            return raw / 100m;
+        }
+
+        return raw;
+    }
+
+    private static StockQuote ConvertEastMoneyQuoteToStockQuote(string symbol, EastMoneyQuoteSnapshot quote)
+    {
+        return new StockQuote
+        {
+            Symbol = NormalizeSymbol(symbol),
+            Price = quote.Price,
+            Open = quote.Open,
+            High = quote.High,
+            Low = quote.Low,
+            Volume = quote.Volume,
+            Turnover = quote.Turnover,
+            PreviousClose = quote.PreviousClose,
+            Change = quote.Change,
+            ChangePercent = quote.ChangePercent,
+            Timestamp = quote.Timestamp
+        };
+    }
+
+    private static StockQuote MergeQuoteWithAStockFallback(
+        StockQuote? original,
+        string symbol,
+        EastMoneyQuoteSnapshot fallback)
+    {
+        var merged = original ?? new StockQuote { Symbol = NormalizeSymbol(symbol) };
+        MergeQuoteFromEastMoney(merged, fallback);
+        return merged;
+    }
+
+    private static void MergeQuoteFromEastMoney(StockQuote target, EastMoneyQuoteSnapshot fallback)
+    {
+        if (target.Price <= 0 && fallback.Price > 0)
+        {
+            target.Price = fallback.Price;
+        }
+
+        if (target.PreviousClose <= 0 && fallback.PreviousClose > 0)
+        {
+            target.PreviousClose = fallback.PreviousClose;
+        }
+
+        if (target.Open <= 0 && fallback.Open > 0)
+        {
+            target.Open = fallback.Open;
+        }
+
+        if (target.High <= 0 && fallback.High > 0)
+        {
+            target.High = fallback.High;
+        }
+
+        if (target.Low <= 0 && fallback.Low > 0)
+        {
+            target.Low = fallback.Low;
+        }
+
+        if (target.Volume <= 0 && fallback.Volume > 0)
+        {
+            target.Volume = fallback.Volume;
+        }
+
+        if (target.Turnover <= 0 && fallback.Turnover > 0)
+        {
+            target.Turnover = fallback.Turnover;
+        }
+
+        if (target.Change == 0 && fallback.Change != 0)
+        {
+            target.Change = fallback.Change;
+        }
+
+        if (target.ChangePercent == 0 && fallback.ChangePercent != 0)
+        {
+            target.ChangePercent = fallback.ChangePercent;
+        }
+
+        if (target.Timestamp <= UnknownQuoteTimestamp && fallback.Timestamp > UnknownQuoteTimestamp)
+        {
+            target.Timestamp = fallback.Timestamp;
+        }
     }
 
     private async Task<StockQuote?> GetQuoteFromPublicFallbacksAsync(string symbol)
@@ -1930,6 +3550,15 @@ public class LongBridgeService : ILongBridgeService
 
         if (!long.TryParse(token.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var raw))
         {
+            if (DateTime.TryParse(
+                token.ToString(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var parsed))
+            {
+                return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+            }
+
             return UnknownQuoteTimestamp;
         }
 
@@ -2634,6 +4263,46 @@ public class LongBridgeService : ILongBridgeService
         public long AvgVolume { get; set; }
     }
 
+    private sealed class StaticSecurityInfo
+    {
+        public string Symbol { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Market { get; set; } = string.Empty;
+        public string Currency { get; set; } = string.Empty;
+        public long TotalShares { get; set; }
+        public long CirculatingShares { get; set; }
+        public decimal Eps { get; set; }
+        public decimal EpsTtm { get; set; }
+        public decimal DividendYield { get; set; }
+    }
+
+    private sealed class EastMoneyQuoteSnapshot
+    {
+        public string Symbol { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public decimal Open { get; set; }
+        public decimal High { get; set; }
+        public decimal Low { get; set; }
+        public decimal PreviousClose { get; set; }
+        public decimal Change { get; set; }
+        public decimal ChangePercent { get; set; }
+        public long Volume { get; set; }
+        public decimal Turnover { get; set; }
+        public decimal MarketCap { get; set; }
+        public decimal Pe { get; set; }
+        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    }
+
+    private sealed class MarkdownCompanyProfile
+    {
+        public string Title { get; init; } = string.Empty;
+        public string Overview { get; init; } = string.Empty;
+        public string SourceUrl { get; init; } = string.Empty;
+        public List<KeyValuePair<string, string>> Fields { get; init; } = new();
+    }
+
     private sealed record CachedStockSnapshot(DateTime FetchedAtUtc, StockSnapshot Snapshot);
+    private sealed record CachedCompanyProfile(DateTime FetchedAtUtc, LongBridgeCompanyProfile Profile);
     private sealed record LongBridgeApiCallResult(bool Success, string? Content, string? ErrorMessage);
 }

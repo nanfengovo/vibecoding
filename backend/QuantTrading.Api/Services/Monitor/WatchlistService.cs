@@ -27,10 +27,53 @@ public class WatchlistService : IWatchlistService
 
     public async Task<List<Stock>> GetWatchlistAsync()
     {
-        return await _dbContext.Stocks
+        var rows = await _dbContext.Stocks
             .Where(s => s.IsWatched)
             .OrderBy(s => s.Symbol)
             .ToListAsync();
+
+        var changed = false;
+        foreach (var item in rows.Where(s => IsPoorDisplayName(s.Name, s.Symbol)).ToList())
+        {
+            try
+            {
+                var latest = await _longBridgeService.GetStockInfoAsync(item.Symbol);
+                if (latest == null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(latest.Name) && !string.Equals(item.Name, latest.Name, StringComparison.Ordinal))
+                {
+                    item.Name = latest.Name;
+                    changed = true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(latest.Market) && !string.Equals(item.Market, latest.Market, StringComparison.OrdinalIgnoreCase))
+                {
+                    item.Market = latest.Market;
+                    changed = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to enrich watchlist stock name for {Symbol}", item.Symbol);
+            }
+
+            item.Currency = ResolveCurrencyCode(item.Symbol, item.Market);
+        }
+
+        if (changed)
+        {
+            await _dbContext.SaveChangesAsync();
+        }
+
+        foreach (var item in rows)
+        {
+            item.Currency = ResolveCurrencyCode(item.Symbol, item.Market);
+        }
+
+        return rows;
     }
 
     public async Task<Stock?> AddToWatchlistAsync(string symbol, string? notes = null)
@@ -71,6 +114,7 @@ public class WatchlistService : IWatchlistService
             }
 
             existing.IsWatched = true;
+            existing.Currency = ResolveCurrencyCode(existing.Symbol, existing.Market);
             if (!string.IsNullOrWhiteSpace(notes))
             {
                 existing.Notes = notes.Trim();
@@ -98,6 +142,7 @@ public class WatchlistService : IWatchlistService
         }
         
         stockInfo.IsWatched = true;
+        stockInfo.Currency = ResolveCurrencyCode(stockInfo.Symbol, stockInfo.Market);
         stockInfo.Notes = string.IsNullOrWhiteSpace(notes) ? stockInfo.Notes : notes.Trim();
 
         _dbContext.Stocks.Add(stockInfo);
@@ -151,15 +196,42 @@ public class WatchlistService : IWatchlistService
                     ? quote.PreviousClose
                     : (stock.PreviousClose > 0 ? stock.PreviousClose : stock.CurrentPrice);
                 
-                stock.CurrentPrice = quote.Price;
-                stock.PreviousClose = previousClose;
-                stock.Open = quote.Open;
-                stock.High = quote.High;
-                stock.Low = quote.Low;
-                stock.Volume = quote.Volume;
-                stock.Change = quote.Price - previousClose;
-                stock.ChangePercent = previousClose > 0 ? (quote.Price - previousClose) / previousClose * 100 : 0;
-                stock.LastUpdated = DateTime.UtcNow;
+                if (quote.Price > 0)
+                {
+                    stock.CurrentPrice = quote.Price;
+                }
+
+                if (previousClose > 0)
+                {
+                    stock.PreviousClose = previousClose;
+                }
+
+                if (quote.Open > 0)
+                {
+                    stock.Open = quote.Open;
+                }
+
+                if (quote.High > 0)
+                {
+                    stock.High = quote.High;
+                }
+
+                if (quote.Low > 0)
+                {
+                    stock.Low = quote.Low;
+                }
+
+                if (quote.Volume > 0)
+                {
+                    stock.Volume = quote.Volume;
+                }
+
+                stock.Change = stock.CurrentPrice - previousClose;
+                stock.ChangePercent = previousClose > 0 ? (stock.CurrentPrice - previousClose) / previousClose * 100 : 0;
+                stock.LastUpdated = quote.Timestamp > DateTime.UnixEpoch
+                    ? DateTime.SpecifyKind(quote.Timestamp, DateTimeKind.Utc)
+                    : DateTime.UtcNow;
+                stock.Currency = ResolveCurrencyCode(stock.Symbol, stock.Market);
 
                 await _realtimePushService.PushQuoteAsync(stock.Symbol, new
                 {
@@ -181,6 +253,35 @@ public class WatchlistService : IWatchlistService
         
         await _dbContext.SaveChangesAsync();
         _logger.LogInformation("Refreshed watchlist: {Count} stocks", watchlist.Count);
+    }
+
+    private static string ResolveCurrencyCode(string? symbol, string? market)
+    {
+        var marketCode = InferMarket(symbol, market);
+        return marketCode switch
+        {
+            "SH" or "SZ" => "CNY",
+            "HK" => "HKD",
+            "SG" => "SGD",
+            _ => "USD"
+        };
+    }
+
+    private static string InferMarket(string? symbol, string? market)
+    {
+        var explicitMarket = (market ?? string.Empty).Trim().ToUpperInvariant();
+        if (!string.IsNullOrWhiteSpace(explicitMarket))
+        {
+            return explicitMarket;
+        }
+
+        var normalizedSymbol = NormalizeSymbol(symbol ?? string.Empty);
+        if (normalizedSymbol.Contains('.'))
+        {
+            return normalizedSymbol.Split('.').LastOrDefault()?.ToUpperInvariant() ?? "US";
+        }
+
+        return "US";
     }
 
     private static string NormalizeSymbol(string symbol)
@@ -254,6 +355,25 @@ public class WatchlistService : IWatchlistService
             || stock.Low52Week > 0
             || stock.AvgVolume > 0
             || stock.MarketCap > 0;
+    }
+
+    private static bool IsPoorDisplayName(string? name, string symbol)
+    {
+        var current = (name ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(current))
+        {
+            return true;
+        }
+
+        var normalized = NormalizeSymbol(symbol);
+        var baseSymbol = normalized.Split('.').FirstOrDefault() ?? normalized;
+        if (current.Equals(normalized, StringComparison.OrdinalIgnoreCase)
+            || current.Equals(baseSymbol, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return current.All(char.IsDigit);
     }
 
 }

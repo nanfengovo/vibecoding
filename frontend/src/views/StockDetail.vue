@@ -2,7 +2,7 @@
   <div class="stock-detail">
     <div class="page-header">
       <div class="stock-info">
-        <h1>{{ stock?.name || symbol }}</h1>
+        <h1>{{ displayStockName }}</h1>
         <span class="symbol-badge">{{ symbol }}</span>
         <span class="exchange-badge">{{ stock?.market || 'US' }}</span>
       </div>
@@ -21,7 +21,7 @@
     <div class="price-overview">
       <div class="current-price">
         <span :class="['price', (quote?.change ?? 0) >= 0 ? 'price-up' : 'price-down']">
-          ${{ formatPrice(quote?.current) }}
+          {{ formatMoney(quote?.current) }}
         </span>
         <span :class="['change', (quote?.change ?? 0) >= 0 ? 'price-up' : 'price-down']">
           {{ formatChange(quote?.change) }} ({{ formatPercent(quote?.changePercent) }})
@@ -30,19 +30,19 @@
       <div class="price-stats">
         <div class="stat-item">
           <span class="label">开盘</span>
-          <span class="value">${{ formatPrice(quote?.open) }}</span>
+          <span class="value">{{ formatMoney(quote?.open) }}</span>
         </div>
         <div class="stat-item">
           <span class="label">最高</span>
-          <span class="value">${{ formatPrice(quote?.high) }}</span>
+          <span class="value">{{ formatMoney(quote?.high) }}</span>
         </div>
         <div class="stat-item">
           <span class="label">最低</span>
-          <span class="value">${{ formatPrice(quote?.low) }}</span>
+          <span class="value">{{ formatMoney(quote?.low) }}</span>
         </div>
         <div class="stat-item">
           <span class="label">昨收</span>
-          <span class="value">${{ formatPrice(quote?.previousClose) }}</span>
+          <span class="value">{{ formatMoney(quote?.previousClose) }}</span>
         </div>
         <div class="stat-item">
           <span class="label">成交量</span>
@@ -50,7 +50,7 @@
         </div>
         <div class="stat-item">
           <span class="label">成交额</span>
-          <span class="value">${{ formatTurnover(quote?.turnover) }}</span>
+          <span class="value">{{ formatTurnover(quote?.turnover) }}</span>
         </div>
       </div>
     </div>
@@ -101,7 +101,7 @@
           <div class="info-grid">
             <div class="info-item">
               <span class="label">市值</span>
-              <span class="value">${{ formatMarketCap(stock?.marketCap) }}</span>
+              <span class="value">{{ formatMarketCap(stock?.marketCap) }}</span>
             </div>
             <div class="info-item">
               <span class="label">市盈率</span>
@@ -109,7 +109,7 @@
             </div>
             <div class="info-item">
               <span class="label">每股收益</span>
-              <span class="value">${{ formatPrice(stock?.eps) }}</span>
+              <span class="value">{{ formatMoney(stock?.eps) }}</span>
             </div>
             <div class="info-item">
               <span class="label">股息率</span>
@@ -117,11 +117,11 @@
             </div>
             <div class="info-item">
               <span class="label">52周最高</span>
-              <span class="value">${{ formatPrice(stock?.high52Week) }}</span>
+              <span class="value">{{ formatMoney(stock?.high52Week) }}</span>
             </div>
             <div class="info-item">
               <span class="label">52周最低</span>
-              <span class="value">${{ formatPrice(stock?.low52Week) }}</span>
+              <span class="value">{{ formatMoney(stock?.low52Week) }}</span>
             </div>
           </div>
         </div>
@@ -215,7 +215,7 @@
             </el-form-item>
             <el-form-item>
               <div class="trade-summary">
-                预估金额: ${{ (tradeForm.quantity * tradeForm.price).toFixed(2) }}
+                预估金额: {{ formatMoney(tradeForm.quantity * tradeForm.price) }}
               </div>
             </el-form-item>
             <el-form-item>
@@ -292,6 +292,83 @@ const tradeForm = ref({
 const isWatched = computed(() =>
   appStore.watchlist.some(item => item.symbol === symbol.value)
 )
+
+function inferMarketFromSymbol(symbolValue?: string): string {
+  const normalized = String(symbolValue || '').trim().toUpperCase()
+  if (normalized.includes('.')) {
+    const suffix = normalized.split('.').pop() || ''
+    if (suffix) {
+      return suffix.toUpperCase()
+    }
+  }
+
+  if (/^\d{6}$/.test(normalized)) {
+    return normalized.startsWith('6') || normalized.startsWith('9') || normalized.startsWith('5') ? 'SH' : 'SZ'
+  }
+
+  if (/^\d{5}$/.test(normalized)) {
+    return 'HK'
+  }
+
+  return 'US'
+}
+
+function resolveCurrencyCode(): string {
+  const explicit = String(stock.value?.currency || '').trim().toUpperCase()
+  if (explicit) {
+    return explicit
+  }
+
+  const market = String(stock.value?.market || inferMarketFromSymbol(symbol.value)).trim().toUpperCase()
+  if (market === 'SH' || market === 'SZ') return 'CNY'
+  if (market === 'HK') return 'HKD'
+  if (market === 'SG') return 'SGD'
+  return 'USD'
+}
+
+function currencyPrefix(code: string): string {
+  switch (code) {
+    case 'CNY':
+      return '¥'
+    case 'HKD':
+      return 'HK$'
+    case 'SGD':
+      return 'S$'
+    default:
+      return '$'
+  }
+}
+
+function isPoorDisplayName(name?: string): boolean {
+  const current = String(name || '').trim()
+  if (!current) {
+    return true
+  }
+
+  const normalizedSymbol = String(symbol.value || '').trim().toUpperCase()
+  const baseSymbol = normalizedSymbol.split('.')[0] || normalizedSymbol
+  return current.toUpperCase() === normalizedSymbol
+    || current.toUpperCase() === baseSymbol
+    || /^\d{4,6}$/.test(current)
+}
+
+const displayStockName = computed(() => {
+  const directName = String(stock.value?.name || '').trim()
+  if (!isPoorDisplayName(directName)) {
+    return directName
+  }
+
+  const normalizedSymbol = String(symbol.value || '').trim().toUpperCase()
+  const baseSymbol = normalizedSymbol.split('.')[0] || normalizedSymbol
+  const market = String(stock.value?.market || inferMarketFromSymbol(normalizedSymbol)).toUpperCase()
+  if (market === 'SH' || market === 'SZ') {
+    return `A股 ${baseSymbol}`
+  }
+  if (market === 'HK') {
+    return `港股 ${baseSymbol}`
+  }
+  return baseSymbol || symbol.value
+})
 
 type AiHeading = {
   id: string
@@ -677,9 +754,9 @@ function isValidNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
-function formatPrice(value?: number): string {
+function formatMoney(value?: number): string {
   if (!isValidNumber(value)) return '-'
-  return value.toFixed(2)
+  return `${currencyPrefix(resolveCurrencyCode())}${value.toFixed(2)}`
 }
 
 function formatPlain(value?: number): string {
@@ -712,17 +789,19 @@ function formatVolume(value?: number): string {
 
 function formatTurnover(value?: number): string {
   if (!value) return '-'
-  if (value >= 1000000000) return (value / 1000000000).toFixed(2) + 'B'
-  if (value >= 1000000) return (value / 1000000).toFixed(2) + 'M'
-  return value.toFixed(2)
+  const prefix = currencyPrefix(resolveCurrencyCode())
+  if (value >= 1000000000) return `${prefix}${(value / 1000000000).toFixed(2)}B`
+  if (value >= 1000000) return `${prefix}${(value / 1000000).toFixed(2)}M`
+  return `${prefix}${value.toFixed(2)}`
 }
 
 function formatMarketCap(value?: number): string {
   if (!value) return '-'
-  if (value >= 1000000000000) return (value / 1000000000000).toFixed(2) + 'T'
-  if (value >= 1000000000) return (value / 1000000000).toFixed(2) + 'B'
-  if (value >= 1000000) return (value / 1000000).toFixed(2) + 'M'
-  return value.toFixed(2)
+  const prefix = currencyPrefix(resolveCurrencyCode())
+  if (value >= 1000000000000) return `${prefix}${(value / 1000000000000).toFixed(2)}T`
+  if (value >= 1000000000) return `${prefix}${(value / 1000000000).toFixed(2)}B`
+  if (value >= 1000000) return `${prefix}${(value / 1000000).toFixed(2)}M`
+  return `${prefix}${value.toFixed(2)}`
 }
 
 function formatDateTime(value?: string): string {

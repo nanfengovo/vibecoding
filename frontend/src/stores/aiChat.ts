@@ -19,6 +19,7 @@ export interface AiChatSession {
   createdAt: string
   updatedAt: string
   symbol: string
+  skillId: string
   providerId: string
   model: string
   messages: AiChatMessage[]
@@ -87,6 +88,7 @@ function createSession(seed?: Partial<AiChatSession>): AiChatSession {
     createdAt: seed?.createdAt || now,
     updatedAt: seed?.updatedAt || now,
     symbol: String(seed?.symbol || ''),
+    skillId: String(seed?.skillId || ''),
     providerId: String(seed?.providerId || ''),
     model: String(seed?.model || ''),
     messages: Array.isArray(seed?.messages) ? seed!.messages : []
@@ -197,7 +199,7 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     session.updatedAt = new Date().toISOString()
   }
 
-  function updateSessionMeta(payload: { providerId?: string; model?: string; symbol?: string }) {
+  function updateSessionMeta(payload: { providerId?: string; model?: string; symbol?: string; skillId?: string }) {
     ensureHydrated()
     const session = activeSession.value
     if (!session) {
@@ -223,6 +225,13 @@ export const useAiChatStore = defineStore('ai-chat', () => {
       const next = payload.symbol
       if (session.symbol !== next) {
         session.symbol = next
+        changed = true
+      }
+    }
+    if (typeof payload.skillId === 'string') {
+      const next = payload.skillId
+      if (session.skillId !== next) {
+        session.skillId = next
         changed = true
       }
     }
@@ -328,6 +337,7 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     providerId?: string
     model?: string
     symbol?: string
+    skillId?: string
   }) {
     ensureHydrated()
     if (sending.value) {
@@ -345,11 +355,13 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     }
 
     const symbol = String(payload.symbol || '').trim()
+    const skillId = String(payload.skillId || '').trim()
     const providerId = String(payload.providerId || '').trim()
     const model = String(payload.model || '').trim()
 
     updateSessionMeta({
       symbol,
+      skillId,
       providerId,
       model
     })
@@ -367,6 +379,7 @@ export const useAiChatStore = defineStore('ai-chat', () => {
       renameSession(session.id, question)
     }
 
+    const snapshotDraft = question
     draftQuestion.value = ''
     sending.value = true
 
@@ -374,6 +387,7 @@ export const useAiChatStore = defineStore('ai-chat', () => {
       const result = await aiApi.chat({
         question,
         symbol: symbol || undefined,
+        skillId: skillId || undefined,
         providerId: providerId || undefined,
         model: model || undefined
       })
@@ -413,6 +427,10 @@ export const useAiChatStore = defineStore('ai-chat', () => {
           isError: true
         }
       ])
+
+      if (!String(draftQuestion.value || '').trim()) {
+        draftQuestion.value = snapshotDraft
+      }
     } finally {
       sending.value = false
     }

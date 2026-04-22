@@ -1,11 +1,14 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using QuantTrading.Api.Data;
 using QuantTrading.Api.Models;
 using QuantTrading.Api.Services.AI;
 using QuantTrading.Api.Services.LongBridge;
 using QuantTrading.Api.Services.Notification;
+using System.Net.Http.Headers;
+using System.Text;
 
 namespace QuantTrading.Api.Controllers;
 
@@ -53,7 +56,14 @@ public class ConfigController : ControllerBase
                 AppKey = GetString(configs, "longbridge", "AppKey", _configuration["LongBridge:AppKey"]),
                 AppSecret = GetSecret(configs, "longbridge", "AppSecret", _configuration["LongBridge:AppSecret"]),
                 AccessToken = GetSecret(configs, "longbridge", "AccessToken", _configuration["LongBridge:AccessToken"]),
-                BaseUrl = GetString(configs, "longbridge", "BaseUrl", _configuration["LongBridge:BaseUrl"] ?? "https://openapi.longportapp.com")
+                BaseUrl = GetString(configs, "longbridge", "BaseUrl", _configuration["LongBridge:BaseUrl"] ?? "https://openapi.longbridge.com"),
+                SkillEnabled = GetBool(configs, "longbridge", "SkillEnabled", false),
+                SkillInstallUrl = GetString(configs, "longbridge", "SkillInstallUrl", "https://open.longbridge.com/skill/install.md"),
+                McpEnabled = GetBool(configs, "longbridge", "McpEnabled", false),
+                McpServerUrl = GetString(configs, "longbridge", "McpServerUrl", "https://openapi.longbridge.com/mcp"),
+                McpTransport = GetString(configs, "longbridge", "McpTransport", "streamable_http"),
+                McpClientName = GetString(configs, "longbridge", "McpClientName", "QuantTrading"),
+                McpAuthToken = GetSecret(configs, "longbridge", "McpAuthToken")
             },
             Proxy = new ProxyConfigResponse
             {
@@ -187,6 +197,17 @@ public class ConfigController : ControllerBase
             return BadRequest(new { success = false, message = openAiResult.Message });
         }
 
+        if (channel.Equals("mcp", StringComparison.OrdinalIgnoreCase))
+        {
+            var (success, message) = await TestLongBridgeMcpAsync();
+            if (success)
+            {
+                return Ok(new { success = true, message });
+            }
+
+            return BadRequest(new { success = false, message });
+        }
+
         var result = await _notificationService.TestAsync(channel);
         if (result)
         {
@@ -194,6 +215,76 @@ public class ConfigController : ControllerBase
         }
 
         return BadRequest(new { success = false, message = "Failed to send test notification" });
+    }
+
+    private async Task<(bool Success, string Message)> TestLongBridgeMcpAsync()
+    {
+        var configs = await LoadConfigMapAsync();
+        var enabled = GetBool(configs, "longbridge", "McpEnabled", false);
+        if (!enabled)
+        {
+            return (false, "MCP 未启用，请先在长桥配置中开启。");
+        }
+
+        var serverUrl = GetString(configs, "longbridge", "McpServerUrl", "https://openapi.longbridge.com/mcp");
+        if (string.IsNullOrWhiteSpace(serverUrl))
+        {
+            return (false, "MCP Server URL 不能为空。");
+        }
+
+        var authToken = GetString(configs, "longbridge", "McpAuthToken");
+        var clientName = GetString(configs, "longbridge", "McpClientName", "QuantTrading");
+        var requestBody = new JObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JObject
+            {
+                ["protocolVersion"] = "2025-03-26",
+                ["capabilities"] = new JObject(),
+                ["clientInfo"] = new JObject
+                {
+                    ["name"] = string.IsNullOrWhiteSpace(clientName) ? "QuantTrading" : clientName,
+                    ["version"] = "1.0.0"
+                }
+            }
+        };
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            using var request = new HttpRequestMessage(HttpMethod.Post, serverUrl.Trim());
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+            if (!string.IsNullOrWhiteSpace(authToken))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", authToken.Trim());
+            }
+
+            request.Content = new StringContent(requestBody.ToString(Formatting.None), Encoding.UTF8, "application/json");
+            var response = await http.SendAsync(request);
+            var payload = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                return (true, "MCP 初始化成功，可在 AI Chat 中按 Skill 模式使用。");
+            }
+
+            if ((int)response.StatusCode == 401 || (int)response.StatusCode == 403)
+            {
+                return (false, "MCP 服务返回未授权，请检查 OAuth 授权或自定义 Token。");
+            }
+
+            var message = string.IsNullOrWhiteSpace(payload)
+                ? $"MCP 连接失败（{(int)response.StatusCode}）"
+                : $"MCP 连接失败（{(int)response.StatusCode}）：{payload}";
+            return (false, message);
+        }
+        catch (Exception ex)
+        {
+            return (false, $"MCP 连接异常：{ex.Message}");
+        }
     }
 
     [HttpGet("notifications/logs")]
@@ -213,6 +304,13 @@ public class ConfigController : ControllerBase
         await UpsertConfigAsync("longbridge", "AppSecret", config.AppSecret, "Long Bridge App Secret");
         await UpsertConfigAsync("longbridge", "AccessToken", config.AccessToken, "Long Bridge Access Token");
         await UpsertConfigAsync("longbridge", "BaseUrl", NormalizeLongBridgeBaseUrl(config.BaseUrl), "Long Bridge API Base Url");
+        await UpsertConfigAsync("longbridge", "SkillEnabled", FormatBool(config.SkillEnabled), "Enable LongBridge Skill");
+        await UpsertConfigAsync("longbridge", "SkillInstallUrl", config.SkillInstallUrl, "LongBridge Skill Install Url");
+        await UpsertConfigAsync("longbridge", "McpEnabled", FormatBool(config.McpEnabled), "Enable LongBridge MCP");
+        await UpsertConfigAsync("longbridge", "McpServerUrl", config.McpServerUrl, "LongBridge MCP Server Url");
+        await UpsertConfigAsync("longbridge", "McpTransport", config.McpTransport, "LongBridge MCP Transport");
+        await UpsertConfigAsync("longbridge", "McpClientName", config.McpClientName, "LongBridge MCP Client Name");
+        await UpsertConfigAsync("longbridge", "McpAuthToken", config.McpAuthToken, "LongBridge MCP Auth Token");
     }
 
     private async Task UpdateProxyAsync(ProxyUpdateRequest config)
@@ -643,6 +741,7 @@ public class ConfigController : ControllerBase
         {
             ("longbridge", "appsecret") => true,
             ("longbridge", "accesstoken") => true,
+            ("longbridge", "mcpauthtoken") => true,
             ("proxy", "password") => true,
             ("email", "smtppassword") => true,
             ("feishu", "secret") => true,
@@ -660,6 +759,13 @@ public class ConfigController : ControllerBase
             ("longbridge", "appsecret") => "Long Bridge App Secret",
             ("longbridge", "accesstoken") => "Long Bridge Access Token",
             ("longbridge", "baseurl") => "Long Bridge API Base Url",
+            ("longbridge", "skillenabled") => "Enable LongBridge Skill",
+            ("longbridge", "skillinstallurl") => "LongBridge Skill Install Url",
+            ("longbridge", "mcpenabled") => "Enable LongBridge MCP",
+            ("longbridge", "mcpserverurl") => "LongBridge MCP Server Url",
+            ("longbridge", "mcptransport") => "LongBridge MCP Transport",
+            ("longbridge", "mcpclientname") => "LongBridge MCP Client Name",
+            ("longbridge", "mcpauthtoken") => "LongBridge MCP Auth Token",
             ("proxy", "enabled") => "Enable Proxy",
             ("proxy", "host") => "Proxy Host",
             ("proxy", "port") => "Proxy Port",
@@ -736,6 +842,13 @@ public class ConfigController : ControllerBase
         public string? AppSecret { get; set; }
         public string? AccessToken { get; set; }
         public string? BaseUrl { get; set; }
+        public bool? SkillEnabled { get; set; }
+        public string? SkillInstallUrl { get; set; }
+        public bool? McpEnabled { get; set; }
+        public string? McpServerUrl { get; set; }
+        public string? McpTransport { get; set; }
+        public string? McpClientName { get; set; }
+        public string? McpAuthToken { get; set; }
     }
 
     public sealed class ProxyUpdateRequest
@@ -798,6 +911,13 @@ public class ConfigController : ControllerBase
         public string AppSecret { get; init; } = string.Empty;
         public string AccessToken { get; init; } = string.Empty;
         public string BaseUrl { get; init; } = string.Empty;
+        public bool SkillEnabled { get; init; }
+        public string SkillInstallUrl { get; init; } = string.Empty;
+        public bool McpEnabled { get; init; }
+        public string McpServerUrl { get; init; } = string.Empty;
+        public string McpTransport { get; init; } = string.Empty;
+        public string McpClientName { get; init; } = string.Empty;
+        public string McpAuthToken { get; init; } = string.Empty;
     }
 
     public sealed class ProxyConfigResponse

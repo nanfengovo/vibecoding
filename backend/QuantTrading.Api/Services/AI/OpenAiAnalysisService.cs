@@ -27,10 +27,24 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         "最新", "实时", "现价", "股价", "价格", "涨跌", "开盘", "收盘", "行情", "报价", "多少", "最新价",
         "last price", "live", "latest", "latest price", "current price", "quote"
     };
+    private static readonly string[] DirectQuoteKeywords =
+    {
+        "最新股价", "最新价格", "最新价", "现价", "现在多少钱", "多少钱", "报价", "股价",
+        "latest price", "current price", "last price", "price now", "quote"
+    };
     private static readonly string[] ChineseNoiseWords =
     {
         "股票", "股价", "价格", "行情", "走势", "分析", "最新", "实时", "现在", "获取", "帮我", "请问", "一下",
         "看看", "查询", "多少", "的", "股", "一只", "标的", "美股", "港股", "a股", "A股", "今日", "今天", "当前"
+    };
+    private static readonly Dictionary<string, string> SkillPrompts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["cross-market-selection"] = "Skill: 跨市场选股。优先按估值、趋势和流动性筛选，结果请给出可执行的候选清单。",
+        ["technical-diagnosis"] = "Skill: 技术面诊断。请从趋势、结构、量价、关键位与失效条件给出结论。",
+        ["financial-research"] = "Skill: 财报研究。请拆解收入、利润、现金流和估值变化，标注核心变量。",
+        ["smart-money-tracking"] = "Skill: 聪明钱追踪。重点分析成交异动、资金流向与板块联动。",
+        ["advanced-order"] = "Skill: 进阶下单。输出分批入场、止损、止盈与仓位控制建议。",
+        ["position-review"] = "Skill: 持仓复盘。总结得失、风险暴露和下一步调整动作。"
     };
     private readonly QuantTradingDbContext _dbContext;
     private readonly IConfiguration _configuration;
@@ -142,16 +156,6 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         CancellationToken cancellationToken = default)
     {
         var runtime = await GetRuntimeConfigAsync(cancellationToken);
-        if (!runtime.Enabled)
-        {
-            throw new InvalidOperationException("OpenAI 分析未启用，请先在设置中开启。");
-        }
-
-        var provider = ResolveProvider(runtime, input.ProviderId);
-        if (string.IsNullOrWhiteSpace(provider.ApiKey))
-        {
-            throw new InvalidOperationException($"模型源“{provider.Name}”未配置 API Key。");
-        }
 
         var question = (input.Question ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(question))
@@ -160,6 +164,7 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         }
 
         var marketSensitive = IsRealtimeSensitiveQuestion(question);
+        var directQuoteQuestion = IsDirectQuoteQuestion(question);
         var resolvedSymbol = await ResolveChatSymbolAsync(input.Symbol, question, cancellationToken);
         if (marketSensitive && string.IsNullOrWhiteSpace(resolvedSymbol))
         {
@@ -167,6 +172,7 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         }
 
         AiChatMarketContext? marketContext = null;
+        string stockDisplayName = string.Empty;
         if (!string.IsNullOrWhiteSpace(resolvedSymbol))
         {
             marketContext = await BuildMarketContextAsync(resolvedSymbol, cancellationToken);
@@ -175,11 +181,72 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
                 throw new InvalidOperationException("未获取到有效实时行情，请检查证券代码格式与长桥权限。");
             }
 
+            try
+            {
+                stockDisplayName = await ResolveStockDisplayNameAsync(resolvedSymbol, cancellationToken);
+            }
+            catch
+            {
+                // Ignore stock name enrichment errors.
+            }
+
             if (marketSensitive && marketContext?.Freshness == "stale")
             {
                 throw new InvalidOperationException(
                     $"行情时间已过期（{marketContext.LagSeconds} 秒），请稍后重试或检查长桥连接状态。");
             }
+        }
+
+        if (marketSensitive && marketContext != null && directQuoteQuestion)
+        {
+            return new AiChatResult
+            {
+                Model = "longbridge-realtime",
+                Content = BuildStrictRealtimeAnswer(question, marketContext, stockDisplayName),
+                GeneratedAt = DateTime.UtcNow,
+                MarketContext = marketContext
+            };
+        }
+
+        if (!runtime.Enabled)
+        {
+            if (marketSensitive && marketContext != null)
+            {
+                return new AiChatResult
+                {
+                    Model = "longbridge-realtime-fallback",
+                    Content = BuildStrictRealtimeAnswer(
+                        question,
+                        marketContext,
+                        stockDisplayName,
+                        "AI 模型未启用，已返回严格实时行情结果。"),
+                    GeneratedAt = DateTime.UtcNow,
+                    MarketContext = marketContext
+                };
+            }
+
+            throw new InvalidOperationException("OpenAI 分析未启用，请先在设置中开启。");
+        }
+
+        var provider = ResolveProvider(runtime, input.ProviderId);
+        if (string.IsNullOrWhiteSpace(provider.ApiKey))
+        {
+            if (marketSensitive && marketContext != null)
+            {
+                return new AiChatResult
+                {
+                    Model = "longbridge-realtime-fallback",
+                    Content = BuildStrictRealtimeAnswer(
+                        question,
+                        marketContext,
+                        stockDisplayName,
+                        $"模型源“{provider.Name}”未配置 API Key，已返回严格实时行情结果。"),
+                    GeneratedAt = DateTime.UtcNow,
+                    MarketContext = marketContext
+                };
+            }
+
+            throw new InvalidOperationException($"模型源“{provider.Name}”未配置 API Key。");
         }
 
         var systemPrompt = marketSensitive
@@ -197,6 +264,17 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
 
         if (!success || string.IsNullOrWhiteSpace(content))
         {
+            if (marketSensitive && marketContext != null)
+            {
+                return new AiChatResult
+                {
+                    Model = "longbridge-realtime-fallback",
+                    Content = BuildStrictRealtimeAnswer(question, marketContext, stockDisplayName, error),
+                    GeneratedAt = DateTime.UtcNow,
+                    MarketContext = marketContext
+                };
+            }
+
             throw new InvalidOperationException(
                 string.IsNullOrWhiteSpace(error) ? "AI 聊天调用失败，请稍后重试。" : error);
         }
@@ -400,7 +478,7 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         {
             using var client = new HttpClient
             {
-                Timeout = TimeSpan.FromSeconds(45),
+                Timeout = TimeSpan.FromSeconds(90),
                 BaseAddress = new Uri(provider.BaseUrl.TrimEnd('/') + "/")
             };
 
@@ -701,6 +779,7 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             }
         }
 
+        var triedKeywords = 0;
         foreach (var keyword in ExtractChineseKeywordCandidates(question))
         {
             var rows = await _longBridgeService.SearchStocksAsync(keyword);
@@ -709,9 +788,47 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             {
                 return NormalizeSymbol(matched.Symbol);
             }
+
+            triedKeywords++;
+            if (triedKeywords >= 2)
+            {
+                break;
+            }
         }
 
         return string.Empty;
+    }
+
+    private async Task<string> ResolveStockDisplayNameAsync(
+        string symbol,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var rows = await _longBridgeService.SearchStocksAsync(normalized);
+        var matched = rows.FirstOrDefault(item => SymbolEquals(item.Symbol, normalized))
+            ?? rows.FirstOrDefault(item => NormalizeSymbol(item.Symbol).StartsWith(normalized, StringComparison.OrdinalIgnoreCase))
+            ?? rows.FirstOrDefault();
+        var name = (matched?.Name ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return string.Empty;
+        }
+
+        var baseSymbol = normalized.Split('.').FirstOrDefault() ?? normalized;
+        if (name.Equals(normalized, StringComparison.OrdinalIgnoreCase)
+            || name.Equals(baseSymbol, StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return name;
     }
 
     private async Task<string> TryResolveSymbolCandidateAsync(
@@ -808,6 +925,14 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         AiChatMarketContext? marketContext)
     {
         var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(input.SkillId)
+            && SkillPrompts.TryGetValue(input.SkillId.Trim(), out var skillPrompt)
+            && !string.IsNullOrWhiteSpace(skillPrompt))
+        {
+            sb.AppendLine(skillPrompt);
+            sb.AppendLine();
+        }
+
         if (marketContext != null)
         {
             sb.AppendLine("实时行情上下文（可信数据源）：");
@@ -849,6 +974,57 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         }
 
         return RealtimeKeywords.Any(keyword => question.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsDirectQuoteQuestion(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            return false;
+        }
+
+        return DirectQuoteKeywords.Any(keyword => question.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string BuildStrictRealtimeAnswer(
+        string question,
+        AiChatMarketContext marketContext,
+        string stockDisplayName,
+        string? modelError = null)
+    {
+        var displayName = string.IsNullOrWhiteSpace(stockDisplayName)
+            ? marketContext.Symbol
+            : $"{stockDisplayName}（{marketContext.Symbol}）";
+        var quoteTimeLocal = marketContext.QuoteTime.ToLocalTime();
+        var lagText = marketContext.LagSeconds <= 0 ? "0 秒" : $"{marketContext.LagSeconds} 秒";
+        var freshnessText = marketContext.Freshness switch
+        {
+            "realtime" => "实时",
+            "delayed_close" => "闭市延迟",
+            _ => "过期"
+        };
+
+        var lines = new List<string>
+        {
+            $"结论：{displayName} 当前最新可用价格为 {marketContext.Price:F4}，涨跌幅 {marketContext.ChangePercent:+0.00;-0.00;0.00}%。",
+            string.Empty,
+            "依据：",
+            $"- 数据源：{marketContext.Source}",
+            $"- 行情时间（本地）：{quoteTimeLocal:yyyy-MM-dd HH:mm:ss}",
+            $"- 时延：{lagText}",
+            $"- 新鲜度：{freshnessText}",
+            string.Empty
+        };
+
+        if (!string.IsNullOrWhiteSpace(modelError))
+        {
+            lines.Add($"说明：本次大模型解析失败（{modelError}），已直接返回 Longbridge 行情数据快照。");
+            lines.Add(string.Empty);
+        }
+
+        lines.Add("风险提示：行情会随交易波动变化，以上仅为数据与分析辅助，不构成投资建议。");
+        lines.Add($"问题原文：{question}");
+        return string.Join('\n', lines);
     }
 
     private static IEnumerable<string> ExtractSymbolCandidatesFromQuestion(string question)
@@ -917,7 +1093,8 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
 
         return rows
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(6)
+            .OrderByDescending(value => value.Length)
+            .Take(4)
             .ToList();
     }
 

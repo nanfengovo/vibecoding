@@ -32,9 +32,48 @@
             <el-form-item label="API地址">
               <el-input v-model="config.longBridge.baseUrl" placeholder="https://openapi.longbridge.com" />
             </el-form-item>
+            <el-divider content-position="left">Skill / MCP</el-divider>
+            <el-form-item label="启用 Skill">
+              <el-switch v-model="config.longBridge.skillEnabled" />
+            </el-form-item>
+            <el-form-item label="Skill 安装文档">
+              <el-input v-model="config.longBridge.skillInstallUrl" placeholder="https://open.longbridge.com/skill/install.md" />
+            </el-form-item>
+            <el-form-item label="启用 MCP">
+              <el-switch v-model="config.longBridge.mcpEnabled" />
+            </el-form-item>
+            <template v-if="config.longBridge.mcpEnabled">
+              <el-form-item label="MCP Server URL">
+                <el-input v-model="config.longBridge.mcpServerUrl" placeholder="https://openapi.longbridge.com/mcp" />
+              </el-form-item>
+              <el-form-item label="传输协议">
+                <el-select v-model="config.longBridge.mcpTransport" style="width: 220px">
+                  <el-option label="Streamable HTTP" value="streamable_http" />
+                  <el-option label="SSE (兼容)" value="sse" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="Client Name">
+                <el-input v-model="config.longBridge.mcpClientName" placeholder="QuantTrading" />
+              </el-form-item>
+              <el-form-item label="MCP Token">
+                <el-input
+                  v-model="config.longBridge.mcpAuthToken"
+                  type="password"
+                  placeholder="可选：自建/代理 MCP 时填写"
+                  show-password
+                />
+              </el-form-item>
+            </template>
             <el-form-item>
               <el-button type="primary" @click="saveLongBridge">保存</el-button>
               <el-button :loading="testing.longbridge" @click="testLongBridge">测试连接</el-button>
+              <el-button
+                :loading="testing.mcp"
+                :disabled="!config.longBridge.mcpEnabled"
+                @click="testMcp"
+              >
+                测试 MCP
+              </el-button>
             </el-form-item>
           </el-form>
           <el-alert
@@ -350,6 +389,7 @@ import type { AiProviderConfig, SystemConfig } from '@/types'
 const activeTab = ref('longbridge')
 const testing = ref({
   longbridge: false,
+  mcp: false,
   email: false,
   feishu: false,
   wechat: false,
@@ -401,7 +441,14 @@ const config = ref<SystemConfig>({
     appKey: '',
     appSecret: '',
     accessToken: '',
-    baseUrl: 'https://openapi.longbridge.com'
+    baseUrl: 'https://openapi.longbridge.com',
+    skillEnabled: false,
+    skillInstallUrl: 'https://open.longbridge.com/skill/install.md',
+    mcpEnabled: false,
+    mcpServerUrl: 'https://openapi.longbridge.com/mcp',
+    mcpTransport: 'streamable_http',
+    mcpClientName: 'QuantTrading',
+    mcpAuthToken: ''
   },
   proxy: {
     enabled: false,
@@ -493,6 +540,19 @@ async function testLongBridge() {
     ElMessage.error(getApiErrorMessage(error, '连接失败，请检查配置'))
   } finally {
     testing.value.longbridge = false
+  }
+}
+
+async function testMcp() {
+  testing.value.mcp = true
+  try {
+    await configApi.update({ longBridge: config.value.longBridge })
+    const result: any = await configApi.testMcp()
+    ElMessage.success(result?.message || 'MCP 连接成功')
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, 'MCP 连接失败，请检查配置或授权'))
+  } finally {
+    testing.value.mcp = false
   }
 }
 

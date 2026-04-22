@@ -17,6 +17,10 @@ public class Stock
     
     [StringLength(10)]
     public string Market { get; set; } = "US"; // US, HK, etc.
+
+    [NotMapped]
+    [StringLength(10)]
+    public string Currency { get; set; } = "USD";
     
     [Column(TypeName = "decimal(18,4)")]
     public decimal CurrentPrice { get; set; }

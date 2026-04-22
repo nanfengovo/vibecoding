@@ -93,11 +93,15 @@
             <el-link type="primary">{{ row.symbol }}</el-link>
           </template>
         </el-table-column>
-        <el-table-column prop="name" label="名称" width="150" />
+        <el-table-column prop="name" label="名称" width="180">
+          <template #default="{ row }">
+            {{ getDisplayName(row) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="current" label="现价" width="100">
           <template #default="{ row }">
             <span :class="(getQuote(row.symbol)?.change ?? 0) >= 0 ? 'price-up' : 'price-down'">
-              {{ formatPrice(getCurrentPrice(row)) }}
+              {{ formatPrice(getCurrentPrice(row), row.symbol, row.stock?.market) }}
             </span>
           </template>
         </el-table-column>
@@ -122,12 +126,12 @@
         </el-table-column>
         <el-table-column prop="high" label="最高" width="100">
           <template #default="{ row }">
-            {{ formatPrice(getDayHigh(row)) }}
+            {{ formatPrice(getDayHigh(row), row.symbol, row.stock?.market) }}
           </template>
         </el-table-column>
         <el-table-column prop="low" label="最低" width="100">
           <template #default="{ row }">
-            {{ formatPrice(getDayLow(row)) }}
+            {{ formatPrice(getDayLow(row), row.symbol, row.stock?.market) }}
           </template>
         </el-table-column>
         <el-table-column prop="notes" label="备注">
@@ -172,10 +176,10 @@
               @click.stop="removeStock(item.id)"
             />
           </div>
-          <div class="stock-name">{{ item.name }}</div>
+          <div class="stock-name">{{ getDisplayName(item) }}</div>
           <div class="stock-price">
             <span :class="(getQuote(item.symbol)?.change ?? 0) >= 0 ? 'price-up' : 'price-down'">
-              {{ formatPrice(getCurrentPrice(item)) }}
+              {{ formatPrice(getCurrentPrice(item), item.symbol, item.stock?.market) }}
             </span>
           </div>
           <div 
@@ -205,21 +209,21 @@
       <template v-else-if="selectedStockDetail">
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="代码">{{ selectedStockDetail.symbol }}</el-descriptions-item>
-          <el-descriptions-item label="名称">{{ selectedStockDetail.name }}</el-descriptions-item>
+          <el-descriptions-item label="名称">{{ getDisplayName(selectedStockDetail) }}</el-descriptions-item>
           <el-descriptions-item label="市场">{{ selectedStockDetail.market || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="现价">{{ formatPrice(selectedStockDetail.currentPrice) }}</el-descriptions-item>
-          <el-descriptions-item label="昨收">{{ formatPrice(selectedStockDetail.previousClose) }}</el-descriptions-item>
+          <el-descriptions-item label="现价">{{ formatPrice(selectedStockDetail.currentPrice, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
+          <el-descriptions-item label="昨收">{{ formatPrice(selectedStockDetail.previousClose, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
           <el-descriptions-item label="涨跌幅">{{ formatPercent(selectedStockDetail.changePercent) }}</el-descriptions-item>
-          <el-descriptions-item label="开盘">{{ formatPrice(selectedStockDetail.open) }}</el-descriptions-item>
-          <el-descriptions-item label="最高">{{ formatPrice(selectedStockDetail.high) }}</el-descriptions-item>
-          <el-descriptions-item label="最低">{{ formatPrice(selectedStockDetail.low) }}</el-descriptions-item>
+          <el-descriptions-item label="开盘">{{ formatPrice(selectedStockDetail.open, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
+          <el-descriptions-item label="最高">{{ formatPrice(selectedStockDetail.high, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
+          <el-descriptions-item label="最低">{{ formatPrice(selectedStockDetail.low, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
           <el-descriptions-item label="成交量">{{ formatVolume(selectedStockDetail.volume) }}</el-descriptions-item>
-          <el-descriptions-item label="市值">{{ formatMarketCap(selectedStockDetail.marketCap) }}</el-descriptions-item>
+          <el-descriptions-item label="市值">{{ formatMarketCap(selectedStockDetail.marketCap, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
           <el-descriptions-item label="市盈率">{{ formatPlainNumber(selectedStockDetail.pe) }}</el-descriptions-item>
           <el-descriptions-item label="每股收益">{{ formatPlainNumber(selectedStockDetail.eps) }}</el-descriptions-item>
           <el-descriptions-item label="股息率">{{ formatPercent(selectedStockDetail.dividend) }}</el-descriptions-item>
-          <el-descriptions-item label="52周最高">{{ formatPrice(selectedStockDetail.high52Week) }}</el-descriptions-item>
-          <el-descriptions-item label="52周最低">{{ formatPrice(selectedStockDetail.low52Week) }}</el-descriptions-item>
+          <el-descriptions-item label="52周最高">{{ formatPrice(selectedStockDetail.high52Week, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
+          <el-descriptions-item label="52周最低">{{ formatPrice(selectedStockDetail.low52Week, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
           <el-descriptions-item label="平均成交量">{{ formatVolume(selectedStockDetail.avgVolume) }}</el-descriptions-item>
           <el-descriptions-item label="行情时间">{{ formatDateTime(selectedStockDetail.updatedAt) }}</el-descriptions-item>
         </el-descriptions>
@@ -420,6 +424,112 @@ function getQuote(symbol: string): StockQuote | undefined {
     || appStore.quotes.get(`${normalized}.HK`)
 }
 
+function normalizeSymbol(symbol?: string): string {
+  return String(symbol || '').trim().toUpperCase()
+}
+
+function inferMarket(symbol?: string, explicitMarket?: string): string {
+  const market = String(explicitMarket || '').trim().toUpperCase()
+  if (market) {
+    return market
+  }
+
+  const normalized = normalizeSymbol(symbol)
+  if (normalized.includes('.')) {
+    const suffix = normalized.split('.').pop() || ''
+    if (suffix) {
+      return suffix.toUpperCase()
+    }
+  }
+
+  if (/^\d{6}$/.test(normalized)) {
+    return normalized.startsWith('6') || normalized.startsWith('9') || normalized.startsWith('5') ? 'SH' : 'SZ'
+  }
+
+  if (/^\d{5}$/.test(normalized)) {
+    return 'HK'
+  }
+
+  return 'US'
+}
+
+function resolveCurrencyCode(symbol?: string, market?: string): string {
+  const marketCode = inferMarket(symbol, market)
+  if (marketCode === 'SH' || marketCode === 'SZ') {
+    return 'CNY'
+  }
+  if (marketCode === 'HK') {
+    return 'HKD'
+  }
+  if (marketCode === 'SG') {
+    return 'SGD'
+  }
+  return 'USD'
+}
+
+function currencyPrefix(code: string): string {
+  switch (code) {
+    case 'CNY':
+      return '¥'
+    case 'HKD':
+      return 'HK$'
+    case 'SGD':
+      return 'S$'
+    default:
+      return '$'
+  }
+}
+
+function isPoorDisplayName(name?: string, symbol?: string): boolean {
+  const current = String(name || '').trim()
+  if (!current) {
+    return true
+  }
+  const normalizedSymbol = normalizeSymbol(symbol)
+  const baseSymbol = normalizedSymbol.split('.')[0] || normalizedSymbol
+  if (
+    current.toUpperCase() === normalizedSymbol
+    || current.toUpperCase() === baseSymbol
+    || /^\d{4,6}$/.test(current)
+  ) {
+    return true
+  }
+  return false
+}
+
+function buildNameFallback(symbol?: string, market?: string): string {
+  const normalized = normalizeSymbol(symbol)
+  const baseSymbol = normalized.split('.')[0] || normalized
+  const marketCode = inferMarket(symbol, market)
+  if (marketCode === 'SH' || marketCode === 'SZ') {
+    return `A股 ${baseSymbol}`
+  }
+  if (marketCode === 'HK') {
+    return `港股 ${baseSymbol}`
+  }
+  if (marketCode === 'SG') {
+    return `新加坡 ${baseSymbol}`
+  }
+  return baseSymbol
+}
+
+function getDisplayName(row: any): string {
+  const symbol = String(row?.symbol || '').trim()
+  const market = String(row?.market || row?.stock?.market || '').trim()
+  const profileTitle = String(companyProfile.value?.title || '').trim()
+
+  if (selectedStockDetail.value && row === selectedStockDetail.value && !isPoorDisplayName(profileTitle, symbol)) {
+    return profileTitle
+  }
+
+  const directName = String(row?.name || row?.stock?.name || '').trim()
+  if (!isPoorDisplayName(directName, symbol)) {
+    return directName
+  }
+
+  return buildNameFallback(symbol, market)
+}
+
 function toNumber(value: unknown): number | null {
   const numeric = Number(value)
   return Number.isFinite(numeric) ? numeric : null
@@ -469,12 +579,13 @@ function formatVolume(value?: number): string {
   return value.toString()
 }
 
-function formatMarketCap(value?: number): string {
+function formatMarketCap(value?: number, symbol?: string, market?: string): string {
   if (!value) return '-'
-  if (value >= 1000000000000) return (value / 1000000000000).toFixed(2) + 'T'
-  if (value >= 1000000000) return (value / 1000000000).toFixed(2) + 'B'
-  if (value >= 1000000) return (value / 1000000).toFixed(2) + 'M'
-  return value.toFixed(2)
+  const prefix = currencyPrefix(resolveCurrencyCode(symbol, market))
+  if (value >= 1000000000000) return `${prefix}${(value / 1000000000000).toFixed(2)}T`
+  if (value >= 1000000000) return `${prefix}${(value / 1000000000).toFixed(2)}B`
+  if (value >= 1000000) return `${prefix}${(value / 1000000).toFixed(2)}M`
+  return `${prefix}${value.toFixed(2)}`
 }
 
 function formatPlainNumber(value?: number): string {
@@ -492,12 +603,13 @@ function formatDateTime(value?: string): string {
   return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm:ss') : '-'
 }
 
-function formatPrice(value?: number | null): string {
+function formatPrice(value?: number | null, symbol?: string, market?: string): string {
   if (value === null || value === undefined) {
     return '-'
   }
 
-  return value.toFixed(2)
+  const prefix = currencyPrefix(resolveCurrencyCode(symbol, market))
+  return `${prefix}${value.toFixed(2)}`
 }
 
 function formatConditions(conditions: any[]): string {
@@ -593,6 +705,12 @@ async function loadCompanyProfile(symbol: string) {
   companyProfileLoading.value = true
   try {
     companyProfile.value = await stockApi.getCompanyProfile(normalized)
+    if (selectedStockDetail.value && !isPoorDisplayName(companyProfile.value?.title, selectedStockDetail.value.symbol)) {
+      selectedStockDetail.value = {
+        ...selectedStockDetail.value,
+        name: companyProfile.value.title
+      }
+    }
   } catch (error) {
     const message = (error as any)?.response?.data?.message
       || (error as Error)?.message

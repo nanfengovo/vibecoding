@@ -20,6 +20,7 @@ import type {
   Trade,
   WatchlistItem
 } from '@/types'
+import dayjs from 'dayjs'
 
 type SymbolMeta = {
   name: string
@@ -104,13 +105,23 @@ const SYMBOL_LIBRARY: Record<string, SymbolMeta> = {
 const DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'TSLA']
 
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on'])
-const FALSE_VALUES = new Set(['0', 'false', 'no', 'off'])
 const SUPPORTED_MARKETS = new Set(['US', 'HK', 'SH', 'SZ', 'SG'])
 const REALTIME_STALE_THRESHOLD_SECONDS = 25 * 60
 const REALTIME_QUESTION_KEYWORDS = [
   '最新', '实时', '现价', '股价', '价格', '涨跌', '开盘', '收盘', '行情', '报价', '多少', '最新价',
   'last price', 'live price', 'realtime', 'real-time', 'quote', 'latest price', 'current price'
 ]
+const DIRECT_QUOTE_QUESTION_KEYWORDS = [
+  '最新股价', '最新价格', '实时股价', '实时价格', '现价', '多少钱', '多少', '报价', 'price', 'quote'
+]
+const SKILL_PROMPTS: Record<string, string> = {
+  'cross-market-selection': 'Skill: 跨市场选股。优先按估值、趋势和流动性筛选，输出可执行候选清单。',
+  'technical-diagnosis': 'Skill: 技术面诊断。请从趋势结构、量价关系、关键位和失效条件给出结论。',
+  'financial-research': 'Skill: 财报研究。拆解收入、利润、现金流与估值变化，标注核心变量。',
+  'smart-money-tracking': 'Skill: 聪明钱追踪。重点分析成交异动、资金流向与板块联动。',
+  'advanced-order': 'Skill: 进阶下单。输出分批入场、止损止盈与仓位控制建议。',
+  'position-review': 'Skill: 持仓复盘。总结得失、风险暴露与下一步调整动作。'
+}
 const MARKET_TIMEZONE: Record<string, string> = {
   US: 'America/New_York',
   HK: 'Asia/Hong_Kong',
@@ -149,17 +160,7 @@ export function shouldUseDemoApi(): boolean {
     return true
   }
 
-  if (FALSE_VALUES.has(explicitMode)) {
-    return false
-  }
-
-  if (typeof window === 'undefined') {
-    return false
-  }
-
-  const host = String(window.location.hostname || '').toLowerCase()
-  const apiBase = String(import.meta.env.VITE_API_BASE_URL || '').trim()
-  return host.endsWith('vercel.app') && !apiBase
+  return false
 }
 
 export function announceDemoMode(): void {
@@ -1270,7 +1271,7 @@ async function requestOpenAiLikeCompletion(
 
   for (const model of models) {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 30000)
+    const timer = setTimeout(() => controller.abort(), 90000)
     let disableMaxTokens = false
 
     try {
@@ -1423,6 +1424,14 @@ function isRealtimeSensitiveQuestion(question: string): boolean {
   return REALTIME_QUESTION_KEYWORDS.some((keyword) => normalized.includes(String(keyword).toLowerCase()))
 }
 
+function isDirectQuoteQuestion(question: string): boolean {
+  const normalized = String(question || '').trim().toLowerCase()
+  if (!normalized) {
+    return false
+  }
+  return DIRECT_QUOTE_QUESTION_KEYWORDS.some((keyword) => normalized.includes(String(keyword).toLowerCase()))
+}
+
 function extractChineseNameCandidates(question: string): string[] {
   const rows = (String(question || '').match(/[\u4e00-\u9fff]{2,18}/g) || [])
     .map((item) => item.trim())
@@ -1506,12 +1515,22 @@ function buildChatMarketContext(quote: StockQuote, market: string): AiChatMarket
   }
 }
 
-function buildStrictChatPrompt(question: string, focus: string, marketContext?: AiChatMarketContext): string {
+function buildStrictChatPrompt(
+  question: string,
+  focus: string,
+  marketContext?: AiChatMarketContext,
+  skillId?: string
+): string {
   const rows = [
     '你是专业交易助手，请使用简洁中文回答。',
     '若涉及价格判断，必须只使用下面给出的实时行情，不得引用训练记忆历史价格。',
     ''
   ]
+
+  const normalizedSkillId = String(skillId || '').trim()
+  if (normalizedSkillId && SKILL_PROMPTS[normalizedSkillId]) {
+    rows.push(`Skill 指令：${SKILL_PROMPTS[normalizedSkillId]}`, '')
+  }
 
   if (marketContext) {
     rows.push(
@@ -1536,6 +1555,56 @@ function buildStrictChatPrompt(question: string, focus: string, marketContext?: 
     `用户问题：${question}`,
     '',
     '请按“结论 / 依据 / 风险提示”结构回复，并明确“不构成投资建议”。'
+  )
+
+  return rows.join('\n')
+}
+
+function buildStrictRealtimeAnswer(
+  question: string,
+  marketContext: AiChatMarketContext,
+  stockDisplayName?: string,
+  modelError?: string
+): string {
+  const displayName = String(stockDisplayName || '').trim()
+    ? `${stockDisplayName}（${marketContext.symbol}）`
+    : marketContext.symbol
+
+  const quoteTime = dayjs(marketContext.quoteTime)
+  const quoteTimeText = quoteTime.isValid()
+    ? quoteTime.format('YYYY-MM-DD HH:mm:ss')
+    : marketContext.quoteTime
+  const freshnessText = marketContext.freshness === 'realtime'
+    ? '实时'
+    : marketContext.freshness === 'delayed_close'
+      ? '闭市延迟'
+      : '过期'
+
+  const rows = [
+    `结论：${displayName} 当前最新可用价格为 ${Number(marketContext.price || 0).toFixed(4)}，涨跌幅 ${Number(marketContext.changePercent || 0).toFixed(2)}%。`,
+    '',
+    '依据（Longbridge 实时上下文）：',
+    `- 行情时间：${quoteTimeText} UTC`,
+    `- 距今时延：${Math.max(0, Number(marketContext.lagSeconds || 0))} 秒`,
+    `- 市场状态：${marketContext.marketOpen ? '开市' : '闭市'}`,
+    `- 新鲜度：${freshnessText}`,
+    `- 数据源：${marketContext.source}`,
+    ''
+  ]
+
+  if (modelError) {
+    rows.push(
+      `补充：模型调用失败（${modelError}），已降级为仅返回严格行情结果。`,
+      ''
+    )
+  }
+
+  rows.push(
+    '风险提示：',
+    '- 本回答仅基于最新可用行情快照，不构成投资建议。',
+    `- 若你需要更完整判断，请继续补充时间周期、仓位约束和交易计划目标。`,
+    '',
+    `原问题：${question}`
   )
 
   return rows.join('\n')
@@ -1871,7 +1940,14 @@ function initialConfig(): SystemConfig {
       appKey: '',
       appSecret: '',
       accessToken: '',
-      baseUrl: 'https://openapi.longbridge.com'
+      baseUrl: 'https://openapi.longbridge.com',
+      skillEnabled: false,
+      skillInstallUrl: 'https://open.longbridge.com/skill/install.md',
+      mcpEnabled: false,
+      mcpServerUrl: 'https://mcp.longbridge.com/mcp',
+      mcpTransport: 'streamable_http',
+      mcpClientName: 'QuantTrading',
+      mcpAuthToken: ''
     },
     proxy: {
       enabled: false,
@@ -2796,6 +2872,7 @@ export const demoApi = {
       question: string
       symbol?: string
       focus?: string
+      skillId?: string
       providerId?: string
       model?: string
     }): Promise<AiChatResult> {
@@ -2808,7 +2885,9 @@ export const demoApi = {
       const longBridgeConfig = getState().config.longBridge
       const openAiConfig = getState().config.openAi
       const realtimeSensitive = isRealtimeSensitiveQuestion(question)
+      const directQuoteQuestion = isDirectQuoteQuestion(question)
       const resolvedSecurity = await resolveChatTargetSymbol(payload?.symbol, question)
+      const skillId = String(payload?.skillId || '').trim()
 
       if (realtimeSensitive && !resolvedSecurity) {
         throw new Error('这是实时行情问题，但未识别到标的。请补充证券代码或公司名称（如 601899.SH / 紫金矿业）。')
@@ -2850,21 +2929,48 @@ export const demoApi = {
         }
       }
 
-      const userPrompt = buildStrictChatPrompt(question, focus, marketContext)
-
-      if (openAiConfig.enabled) {
-        const provider = pickAiProvider(openAiConfig, payload?.providerId)
-        const result = await requestOpenAiLikeCompletion(provider, userPrompt, {
-          maxTokens: 1600,
-          temperature: 0.35,
-          modelOverride: payload?.model
-        })
-
+      const stockDisplayName = resolvedSecurity?.name || marketContext?.symbol || ''
+      if (realtimeSensitive && marketContext && directQuoteQuestion) {
         return {
-          model: result.model,
-          content: result.content,
+          model: 'longbridge-realtime',
+          content: buildStrictRealtimeAnswer(question, marketContext, stockDisplayName),
           generatedAt: nowIso(),
           marketContext
+        }
+      }
+
+      const userPrompt = buildStrictChatPrompt(question, focus, marketContext, skillId)
+
+      if (openAiConfig.enabled) {
+        try {
+          const provider = pickAiProvider(openAiConfig, payload?.providerId)
+          const result = await requestOpenAiLikeCompletion(provider, userPrompt, {
+            maxTokens: 1600,
+            temperature: 0.35,
+            modelOverride: payload?.model
+          })
+
+          return {
+            model: result.model,
+            content: result.content,
+            generatedAt: nowIso(),
+            marketContext
+          }
+        } catch (error: any) {
+          if (realtimeSensitive && marketContext) {
+            return {
+              model: 'longbridge-realtime-fallback',
+              content: buildStrictRealtimeAnswer(
+                question,
+                marketContext,
+                stockDisplayName,
+                String(error?.message || '模型调用失败')
+              ),
+              generatedAt: nowIso(),
+              marketContext
+            }
+          }
+          throw error
         }
       }
 

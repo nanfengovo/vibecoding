@@ -53,6 +53,7 @@ public sealed class AiChatInput
     public string Question { get; init; } = string.Empty;
     public string Symbol { get; init; } = string.Empty;
     public string Focus { get; init; } = string.Empty;
+    public string SkillId { get; init; } = string.Empty;
     public string ProviderId { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
 }

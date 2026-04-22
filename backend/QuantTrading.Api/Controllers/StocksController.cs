@@ -51,29 +51,26 @@ public class StocksController : ControllerBase
     [HttpGet("{symbol}/profile")]
     public async Task<ActionResult<CompanyProfileResponse>> GetCompanyProfile(string symbol)
     {
-        var stock = await _longBridgeService.GetStockInfoAsync(symbol);
-        if (stock == null)
+        var profile = await _longBridgeService.GetCompanyProfileAsync(symbol);
+        if (profile == null)
             return NotFound();
 
-        var fields = new List<CompanyProfileField>
+        var response = new CompanyProfileResponse
         {
-            new() { Key = "代码", Value = stock.Symbol },
-            new() { Key = "市场", Value = stock.Market },
-            new() { Key = "当前价", Value = stock.CurrentPrice.ToString("F2") },
-            new() { Key = "52周区间", Value = $"{stock.Low52Week:F2} - {stock.High52Week:F2}" },
-            new() { Key = "市值", Value = stock.MarketCap > 0 ? stock.MarketCap.ToString("F2") : "-" }
+            Symbol = profile.Symbol,
+            Title = profile.Name,
+            Overview = profile.Overview,
+            SourceUrl = profile.SourceUrl,
+            Fields = profile.Fields
+                .Select(item => new CompanyProfileField
+                {
+                    Key = item.Key,
+                    Value = item.Value
+                })
+                .ToList()
         };
 
-        var profile = new CompanyProfileResponse
-        {
-            Symbol = stock.Symbol,
-            Title = stock.Name,
-            Overview = $"{stock.Name}（{stock.Symbol}）当前可通过股票详情页面查看实时行情、K线、交易与 AI 分析信息。",
-            SourceUrl = string.Empty,
-            Fields = fields
-        };
-
-        return Ok(profile);
+        return Ok(response);
     }
 
     [HttpGet("{symbol}/kline")]

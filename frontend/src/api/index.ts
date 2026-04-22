@@ -38,7 +38,7 @@ function resolveApiBaseUrl(): string {
 
 const api: AxiosInstance = axios.create({
   baseURL: resolveApiBaseUrl(),
-  timeout: 30000,
+  timeout: 90000,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -99,6 +99,46 @@ function normalizeStrategy(raw: any): Strategy {
   }
 }
 
+function normalizeStock(raw: any): Stock {
+  const normalized = raw && typeof raw === 'object' ? raw : {}
+  return {
+    symbol: String(normalized?.symbol ?? '').trim().toUpperCase(),
+    name: String(normalized?.name ?? normalized?.title ?? '').trim(),
+    exchange: normalized?.exchange ? String(normalized.exchange) : undefined,
+    market: normalized?.market ? String(normalized.market).toUpperCase() : undefined,
+    currency: normalized?.currency ? String(normalized.currency).toUpperCase() : undefined,
+    currentPrice: Number(normalized?.currentPrice ?? normalized?.current ?? normalized?.price ?? 0),
+    previousClose: Number(normalized?.previousClose ?? normalized?.prevClose ?? 0),
+    open: Number(normalized?.open ?? 0),
+    high: Number(normalized?.high ?? 0),
+    low: Number(normalized?.low ?? 0),
+    change: Number(normalized?.change ?? 0),
+    changePercent: Number(normalized?.changePercent ?? normalized?.change_rate ?? 0),
+    volume: Number(normalized?.volume ?? 0),
+    marketCap: Number(normalized?.marketCap ?? 0),
+    high52Week: Number(normalized?.high52Week ?? 0),
+    low52Week: Number(normalized?.low52Week ?? 0),
+    avgVolume: Number(normalized?.avgVolume ?? 0),
+    pe: Number(normalized?.pe ?? 0),
+    eps: Number(normalized?.eps ?? 0),
+    dividend: Number(normalized?.dividend ?? 0),
+    updatedAt: String(normalized?.updatedAt ?? normalized?.lastUpdated ?? new Date().toISOString())
+  }
+}
+
+function normalizeWatchlistRow(raw: any): WatchlistItem {
+  const stock = normalizeStock(raw)
+  const fallbackTime = stock.updatedAt || new Date().toISOString()
+  return {
+    id: Number(raw?.id ?? 0),
+    symbol: stock.symbol,
+    name: stock.name || stock.symbol.split('.')[0] || stock.symbol,
+    notes: raw?.notes ? String(raw.notes) : '',
+    addedAt: String(raw?.addedAt ?? raw?.createdAt ?? fallbackTime),
+    stock
+  }
+}
+
 // 响应拦截器
 api.interceptors.response.use(
   (response: AxiosResponse) => response.data,
@@ -114,7 +154,8 @@ export const stockApi = {
   search: (query: string) =>
     DEMO_MODE
       ? demoApi.stockApi.search(query)
-      : api.get<any, Stock[]>('/stocks/search', { params: { keyword: query } }),
+      : api.get<any, any[]>('/stocks/search', { params: { keyword: query } })
+        .then((rows) => (rows || []).map((item) => normalizeStock(item))),
   
   getQuote: (symbol: string) =>
     DEMO_MODE
@@ -146,7 +187,8 @@ export const stockApi = {
   getDetail: (symbol: string) =>
     DEMO_MODE
       ? demoApi.stockApi.getDetail(symbol)
-      : api.get<any, Stock>(`/stocks/${symbol}`),
+      : api.get<any, any>(`/stocks/${symbol}`)
+        .then((row) => normalizeStock(row)),
 
   getCompanyProfile: (symbol: string) =>
     DEMO_MODE
@@ -471,12 +513,14 @@ export const monitorApi = {
   getWatchlist: () =>
     DEMO_MODE
       ? demoApi.monitorApi.getWatchlist()
-      : api.get<any, WatchlistItem[]>('/stocks/watchlist'),
+      : api.get<any, any[]>('/stocks/watchlist')
+        .then((rows) => (rows || []).map((item) => normalizeWatchlistRow(item))),
   
   addToWatchlist: (symbol: string, notes?: string) =>
     DEMO_MODE
       ? demoApi.monitorApi.addToWatchlist(symbol, notes)
-      : api.post<any, WatchlistItem>('/stocks/watchlist', { symbol, notes }),
+      : api.post<any, any>('/stocks/watchlist', { symbol, notes })
+        .then((row) => normalizeWatchlistRow(row)),
   
   removeFromWatchlist: (id: number) =>
     DEMO_MODE
@@ -506,6 +550,7 @@ export const aiApi = {
       question: string
       symbol?: string
       focus?: string
+      skillId?: string
       providerId?: string
       model?: string
     }
@@ -577,6 +622,11 @@ export const configApi = {
     DEMO_MODE
       ? demoApi.configApi.testLongBridge()
       : api.post('/config/test/longbridge'),
+
+  testMcp: () =>
+    DEMO_MODE
+      ? Promise.resolve({ success: true, message: '演示模式：MCP 测试已跳过（使用真实后端可测试）' })
+      : api.post('/config/test/mcp'),
 
   testOpenAi: () =>
     DEMO_MODE

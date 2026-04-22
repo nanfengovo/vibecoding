@@ -86,6 +86,7 @@ public class AiController : ControllerBase
                     Question = request.Question,
                     Symbol = request.Symbol ?? string.Empty,
                     Focus = request.Focus ?? string.Empty,
+                    SkillId = request.SkillId ?? string.Empty,
                     ProviderId = request.ProviderId ?? string.Empty,
                     Model = request.Model ?? string.Empty
                 },
@@ -170,6 +171,7 @@ public sealed class AiChatRequest
     public string Question { get; set; } = string.Empty;
     public string? Symbol { get; set; }
     public string? Focus { get; set; }
+    public string? SkillId { get; set; }
     public string? ProviderId { get; set; }
     public string? Model { get; set; }
 }
