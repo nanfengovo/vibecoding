@@ -8,7 +8,7 @@ services:
       - SA_PASSWORD=${DB_PASSWORD:-QuantTrading@2024}
       - MSSQL_PID=Express
     ports:
-      - "11433:1433"
+      - "${DB_PORT:-11433}:1433"
     volumes:
       - sqlserver_data:/var/opt/mssql
     healthcheck:
@@ -48,7 +48,7 @@ services:
       - Wechat__Enabled=${WECHAT_ENABLED:-false}
       - Wechat__WebhookUrl=${WECHAT_WEBHOOK_URL:-}
     ports:
-      - "15000:5000"
+      - "${BACKEND_PORT:-15000}:5000"
     depends_on:
       sqlserver:
         condition: service_healthy
@@ -61,7 +61,7 @@ services:
       dockerfile: Dockerfile
     container_name: quant-frontend
     ports:
-      - "80:80"
+      - "${FRONTEND_PORT:-80}:80"
     depends_on:
       - backend
     restart: unless-stopped

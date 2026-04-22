@@ -7,6 +7,24 @@
       </div>
     </div>
 
+    <el-alert
+      v-if="isDemoMode"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="demo-source-alert"
+      title="当前为前端独立模式：总资产、今日交易、最近交易来自浏览器本地演示数据。"
+      description="行情会优先尝试调用你在“系统设置-长桥API”里配置的接口；若接口不可用将显示为“-”。"
+    />
+    <el-alert
+      v-if="appStore.quoteError"
+      type="error"
+      show-icon
+      :closable="false"
+      class="quote-error-alert"
+      :title="`行情接口异常：${appStore.quoteError}`"
+    />
+
     <el-row :gutter="20" class="stat-cards">
       <el-col :span="6">
         <div class="stat-card">
@@ -175,6 +193,7 @@ import { GridComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { Refresh } from '@element-plus/icons-vue'
 import { stockApi, tradeApi } from '@/api'
+import { shouldUseDemoApi } from '@/api/demo'
 import { useAppStore } from '@/stores/app'
 import type { Trade } from '@/types'
 
@@ -191,6 +210,7 @@ interface BoardItem {
 }
 
 const appStore = useAppStore()
+const isDemoMode = shouldUseDemoApi()
 
 const boardPeriod = ref('60')
 const boardLoading = ref(false)
@@ -397,6 +417,14 @@ onMounted(async () => {
 
 <style lang="scss" scoped>
 .dashboard {
+  .demo-source-alert {
+    margin-bottom: 16px;
+  }
+
+  .quote-error-alert {
+    margin-bottom: 16px;
+  }
+
   .stat-cards {
     margin-bottom: 20px;
   }

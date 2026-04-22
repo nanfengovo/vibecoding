@@ -1,4 +1,5 @@
 import * as signalR from '@microsoft/signalr'
+import { shouldUseDemoApi } from '@/api/demo'
 
 function resolveHubUrl(): string {
   const rawValue = String(import.meta.env.VITE_SIGNALR_BASE_URL || '').trim()
@@ -19,6 +20,10 @@ class SignalRService {
   private strategySubscriptions = new Set<number>()
 
   async connect(): Promise<void> {
+    if (shouldUseDemoApi()) {
+      return
+    }
+
     if (
       this.connection?.state === signalR.HubConnectionState.Connected ||
       this.connection?.state === signalR.HubConnectionState.Connecting

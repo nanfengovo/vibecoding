@@ -41,10 +41,35 @@ public class WatchlistService : IWatchlistService
             return null;
         }
 
-        var existing = await _dbContext.Stocks.FirstOrDefaultAsync(s => s.Symbol == normalizedSymbol);
+        var baseSymbol = normalizedSymbol.Split('.').FirstOrDefault() ?? normalizedSymbol;
+        var symbolCandidates = new[]
+        {
+            normalizedSymbol,
+            baseSymbol,
+            $"{baseSymbol}.US",
+            $"{baseSymbol}.HK",
+            $"{baseSymbol}.CN",
+            $"{baseSymbol}.SH",
+            $"{baseSymbol}.SZ",
+            $"{baseSymbol}.SG"
+        };
+
+        var existing = await _dbContext.Stocks
+            .FirstOrDefaultAsync(s => symbolCandidates.Contains(s.Symbol));
         
         if (existing != null)
         {
+            if (!HasValidMarketData(existing))
+            {
+                _logger.LogWarning("Reject existing invalid watchlist symbol: {Symbol}", existing.Symbol);
+                if (existing.IsWatched)
+                {
+                    existing.IsWatched = false;
+                    await _dbContext.SaveChangesAsync();
+                }
+                return null;
+            }
+
             existing.IsWatched = true;
             if (!string.IsNullOrWhiteSpace(notes))
             {
@@ -55,12 +80,20 @@ public class WatchlistService : IWatchlistService
             return existing;
         }
         
-        var stockInfo = await _longBridgeService.GetStockInfoAsync(normalizedSymbol)
-            ?? CreateFallbackStock(normalizedSymbol);
+        // 优先使用搜索结果校验；若 security list 不完整，则回退到直接按代码拉取详情。
+        var candidates = await _longBridgeService.SearchStocksAsync(normalizedSymbol);
+        var matched = candidates.FirstOrDefault(s => SymbolEquals(s.Symbol, normalizedSymbol));
+        var stockInfo = await _longBridgeService.GetStockInfoAsync(matched?.Symbol ?? normalizedSymbol);
 
         if (stockInfo == null)
         {
-            _logger.LogWarning("Stock not found: {Symbol}", symbol);
+            _logger.LogWarning("Stock detail not found from LongBridge: {Symbol}", normalizedSymbol);
+            return null;
+        }
+
+        if (!HasValidMarketData(stockInfo))
+        {
+            _logger.LogWarning("Reject invalid watchlist symbol with empty market data: {Symbol}", normalizedSymbol);
             return null;
         }
         
@@ -111,7 +144,7 @@ public class WatchlistService : IWatchlistService
         
         foreach (var quote in quotes)
         {
-            var stock = watchlist.FirstOrDefault(s => s.Symbol.Equals(quote.Symbol, StringComparison.OrdinalIgnoreCase));
+            var stock = watchlist.FirstOrDefault(s => SymbolEquals(s.Symbol, quote.Symbol));
             if (stock != null)
             {
                 var previousClose = quote.PreviousClose > 0
@@ -150,17 +183,6 @@ public class WatchlistService : IWatchlistService
         _logger.LogInformation("Refreshed watchlist: {Count} stocks", watchlist.Count);
     }
 
-    private static Stock CreateFallbackStock(string symbol)
-    {
-        return new Stock
-        {
-            Symbol = symbol,
-            Name = symbol,
-            Market = InferMarket(symbol),
-            LastUpdated = DateTime.UtcNow
-        };
-    }
-
     private static string NormalizeSymbol(string symbol)
     {
         var normalized = (symbol ?? string.Empty).Trim().ToUpperInvariant();
@@ -169,9 +191,33 @@ public class WatchlistService : IWatchlistService
             return string.Empty;
         }
 
+        if (normalized.StartsWith("SH", StringComparison.OrdinalIgnoreCase)
+            && normalized.Length == 8
+            && normalized.Skip(2).All(char.IsDigit))
+        {
+            return $"{normalized[2..]}.SH";
+        }
+
+        if (normalized.StartsWith("SZ", StringComparison.OrdinalIgnoreCase)
+            && normalized.Length == 8
+            && normalized.Skip(2).All(char.IsDigit))
+        {
+            return $"{normalized[2..]}.SZ";
+        }
+
         if (normalized.Contains('.'))
         {
             return normalized;
+        }
+
+        if (normalized.All(char.IsDigit) && normalized.Length == 6)
+        {
+            var market = normalized.StartsWith("6", StringComparison.Ordinal)
+                || normalized.StartsWith("9", StringComparison.Ordinal)
+                || normalized.StartsWith("5", StringComparison.Ordinal)
+                ? "SH"
+                : "SZ";
+            return $"{normalized}.{market}";
         }
 
         if (normalized.All(char.IsDigit) && normalized.Length == 5)
@@ -182,16 +228,32 @@ public class WatchlistService : IWatchlistService
         return $"{normalized}.US";
     }
 
-    private static string InferMarket(string symbol)
+    private static bool SymbolEquals(string? left, string? right)
     {
-        var suffix = symbol.Split('.').LastOrDefault()?.ToUpperInvariant();
-        return suffix switch
+        var normalizedLeft = NormalizeSymbol(left ?? string.Empty);
+        var normalizedRight = NormalizeSymbol(right ?? string.Empty);
+        if (normalizedLeft.Equals(normalizedRight, StringComparison.OrdinalIgnoreCase))
         {
-            "HK" => "HK",
-            "CN" => "CN",
-            "SG" => "SG",
-            "US" => "US",
-            _ => "US"
-        };
+            return true;
+        }
+
+        var leftBase = normalizedLeft.Split('.').FirstOrDefault() ?? normalizedLeft;
+        var rightBase = normalizedRight.Split('.').FirstOrDefault() ?? normalizedRight;
+        return leftBase.Equals(rightBase, StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool HasValidMarketData(Stock stock)
+    {
+        return stock.CurrentPrice > 0
+            || stock.PreviousClose > 0
+            || stock.Open > 0
+            || stock.High > 0
+            || stock.Low > 0
+            || stock.Volume > 0
+            || stock.High52Week > 0
+            || stock.Low52Week > 0
+            || stock.AvgVolume > 0
+            || stock.MarketCap > 0;
+    }
+
 }

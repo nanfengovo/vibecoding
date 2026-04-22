@@ -62,6 +62,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '复盘分析', icon: 'TrendCharts' }
       },
       {
+        path: 'ai-chat',
+        name: 'AiChat',
+        component: () => import('@/views/AiChat.vue'),
+        meta: { title: 'AI Chat', icon: 'ChatDotRound' }
+      },
+      {
         path: 'lowcode',
         name: 'LowCode',
         component: () => import('@/views/LowCodeWorkbench.vue'),

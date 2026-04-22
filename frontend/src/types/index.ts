@@ -6,6 +6,9 @@ export interface Stock {
   market?: string
   currentPrice: number
   previousClose: number
+  open?: number
+  high?: number
+  low?: number
   change: number
   changePercent: number
   volume: number
@@ -17,6 +20,17 @@ export interface Stock {
   eps: number
   dividend: number
   updatedAt: string
+}
+
+export interface CompanyProfile {
+  symbol: string
+  title: string
+  overview: string
+  sourceUrl?: string
+  fields: Array<{
+    key: string
+    value: string
+  }>
 }
 
 export interface StockQuote {
@@ -230,7 +244,17 @@ export interface SystemConfig {
     apiKey: string
     baseUrl: string
     model: string
+    providers: AiProviderConfig[]
+    activeProviderId: string
   }
+}
+
+export interface AiProviderConfig {
+  id: string
+  name: string
+  apiKey: string
+  baseUrl: string
+  model: string
 }
 
 // 复盘相关
@@ -251,6 +275,12 @@ export interface ApiResponse<T> {
   data: T
   message?: string
   errors?: string[]
+}
+
+export interface AiChatResult {
+  model: string
+  content: string
+  generatedAt: string
 }
 
 export interface PagedResult<T> {

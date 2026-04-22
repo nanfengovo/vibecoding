@@ -1,6 +1,8 @@
 import axios from 'axios'
 import type { AxiosInstance, AxiosResponse } from 'axios'
 import type {
+  AiChatResult,
+  CompanyProfile,
   Stock,
   StockQuote,
   Candlestick,
@@ -14,6 +16,13 @@ import type {
   PagedResult,
   StockAnalysisResult
 } from '@/types'
+import { announceDemoMode, demoApi, shouldUseDemoApi } from '@/api/demo'
+
+const DEMO_MODE = shouldUseDemoApi()
+
+if (DEMO_MODE) {
+  announceDemoMode()
+}
 
 function resolveApiBaseUrl(): string {
   const rawValue = String(import.meta.env.VITE_API_BASE_URL || '').trim()
@@ -100,14 +109,20 @@ api.interceptors.response.use(
 
 // 股票API
 export const stockApi = {
-  search: (query: string) => 
-    api.get<any, Stock[]>('/stocks/search', { params: { keyword: query } }),
+  search: (query: string) =>
+    DEMO_MODE
+      ? demoApi.stockApi.search(query)
+      : api.get<any, Stock[]>('/stocks/search', { params: { keyword: query } }),
   
-  getQuote: (symbol: string) => 
-    api.get<any, StockQuote>(`/stocks/${symbol}/quote`),
+  getQuote: (symbol: string) =>
+    DEMO_MODE
+      ? demoApi.stockApi.getQuote(symbol)
+      : api.get<any, StockQuote>(`/stocks/${symbol}/quote`),
   
-  getQuotes: (symbols: string[]) => 
-    api.post<any, StockQuote[]>('/stocks/quotes', { symbols }),
+  getQuotes: (symbols: string[]) =>
+    DEMO_MODE
+      ? demoApi.stockApi.getQuotes(symbols)
+      : api.post<any, StockQuote[]>('/stocks/quotes', { symbols }),
   
   getKline: (
     symbol: string,
@@ -115,52 +130,85 @@ export const stockApi = {
     limit: number = 100,
     options?: { start?: string; end?: string }
   ) =>
-    api.get<any, Candlestick[]>(`/stocks/${symbol}/kline`, {
-      params: {
-        period,
-        count: limit,
-        start: options?.start,
-        end: options?.end
-      }
-    }),
+    DEMO_MODE
+      ? demoApi.stockApi.getKline(symbol, period, limit, options)
+      : api.get<any, Candlestick[]>(`/stocks/${symbol}/kline`, {
+        params: {
+          period,
+          count: limit,
+          start: options?.start,
+          end: options?.end
+        }
+      }),
   
-  getDetail: (symbol: string) => 
-    api.get<any, Stock>(`/stocks/${symbol}`)
+  getDetail: (symbol: string) =>
+    DEMO_MODE
+      ? demoApi.stockApi.getDetail(symbol)
+      : api.get<any, Stock>(`/stocks/${symbol}`),
+
+  getCompanyProfile: (symbol: string) =>
+    DEMO_MODE
+      ? demoApi.stockApi.getCompanyProfile(symbol)
+      : api.get<any, CompanyProfile>(`/stocks/${symbol}/profile`)
 }
 
 // 策略API
 export const strategyApi = {
   list: async () => {
+    if (DEMO_MODE) {
+      return demoApi.strategyApi.list()
+    }
+
     const rows = await api.get<any, any[]>('/strategies')
     return (rows || []).map(normalizeStrategy)
   },
   
   get: async (id: number) => {
+    if (DEMO_MODE) {
+      return demoApi.strategyApi.get(id)
+    }
+
     const row = await api.get<any, any>(`/strategies/${id}`)
     return normalizeStrategy(row)
   },
   
   create: async (data: Partial<Strategy>) => {
+    if (DEMO_MODE) {
+      return demoApi.strategyApi.create(data)
+    }
+
     const row = await api.post<any, any>('/strategies', data)
     return normalizeStrategy(row)
   },
   
   update: async (id: number, data: Partial<Strategy>) => {
+    if (DEMO_MODE) {
+      return demoApi.strategyApi.update(id, data)
+    }
+
     const row = await api.put<any, any>(`/strategies/${id}`, data)
     return normalizeStrategy(row)
   },
   
-  delete: (id: number) => 
-    api.delete(`/strategies/${id}`),
+  delete: (id: number) =>
+    DEMO_MODE
+      ? demoApi.strategyApi.delete(id)
+      : api.delete(`/strategies/${id}`),
   
-  toggle: (id: number, isActive: boolean) => 
-    api.post(`/strategies/${id}/toggle`, { isActive }),
+  toggle: (id: number, isActive: boolean) =>
+    DEMO_MODE
+      ? demoApi.strategyApi.toggle(id, isActive)
+      : api.post(`/strategies/${id}/toggle`, { isActive }),
   
-  execute: (id: number) => 
-    api.post(`/strategies/${id}/execute`),
+  execute: (id: number) =>
+    DEMO_MODE
+      ? demoApi.strategyApi.execute(id)
+      : api.post(`/strategies/${id}/execute`),
   
-  reload: (id: number) => 
-    api.post(`/strategies/${id}/reload`)
+  reload: (id: number) =>
+    DEMO_MODE
+      ? demoApi.strategyApi.reload(id)
+      : api.post(`/strategies/${id}/reload`)
 }
 
 // 交易API
@@ -174,6 +222,10 @@ export const tradeApi = {
     startDate?: string
     endDate?: string
   }): Promise<PagedResult<Trade>> => {
+    if (DEMO_MODE) {
+      return demoApi.tradeApi.list(params)
+    }
+
     const response = await api.get<any, any>('/trades', {
       params: {
         startDate: params?.startDate,
@@ -293,19 +345,31 @@ export const tradeApi = {
     }
   },
   
-  get: (id: number) => 
-    api.get<any, Trade>(`/trades/${id}`),
+  get: (id: number) =>
+    DEMO_MODE
+      ? demoApi.tradeApi.get(id)
+      : api.get<any, Trade>(`/trades/${id}`),
   
-  getByStrategy: (strategyId: number) => 
-    api.get<any, Trade[]>(`/trades/strategy/${strategyId}`),
+  getByStrategy: (strategyId: number) =>
+    DEMO_MODE
+      ? demoApi.tradeApi.getByStrategy(strategyId)
+      : api.get<any, Trade[]>(`/trades/strategy/${strategyId}`),
 
   getAccount: () =>
-    api.get('/trades/account'),
+    DEMO_MODE
+      ? demoApi.tradeApi.getAccount()
+      : api.get('/trades/account'),
 
   getPositions: () =>
-    api.get('/trades/positions'),
+    DEMO_MODE
+      ? demoApi.tradeApi.getPositions()
+      : api.get('/trades/positions'),
   
   getStats: async (startDate?: string, endDate?: string) => {
+    if (DEMO_MODE) {
+      return demoApi.tradeApi.getStats(startDate, endDate)
+    }
+
     const result = await tradeApi.list({ page: 1, pageSize: 1000, startDate, endDate })
     const rows = result.items || []
     const totalTrades = rows.length
@@ -335,56 +399,87 @@ export const tradeApi = {
     quantity: number
     price?: number
     strategyId?: number
-  }) => api.post('/trades', payload),
+  }) =>
+    DEMO_MODE
+      ? demoApi.tradeApi.placeOrder(payload)
+      : api.post('/trades', payload),
 
   cancelOrder: (orderId: string) =>
-    api.delete(`/trades/${orderId}`)
+    DEMO_MODE
+      ? demoApi.tradeApi.cancelOrder(orderId)
+      : api.delete(`/trades/${orderId}`)
 }
 
 // 回测API
 export const backtestApi = {
-  list: () => 
-    api.get<any, Backtest[]>('/backtests'),
+  list: () =>
+    DEMO_MODE
+      ? demoApi.backtestApi.list()
+      : api.get<any, Backtest[]>('/backtests'),
   
-  get: (id: number) => 
-    api.get<any, Backtest>(`/backtests/${id}`),
+  get: (id: number) =>
+    DEMO_MODE
+      ? demoApi.backtestApi.get(id)
+      : api.get<any, Backtest>(`/backtests/${id}`),
   
-  create: (data: { strategyId: number; startDate: string; endDate: string; initialCapital: number }) => 
-    api.post<any, Backtest>('/backtests', data),
+  create: (data: { strategyId: number; startDate: string; endDate: string; initialCapital: number }) =>
+    DEMO_MODE
+      ? demoApi.backtestApi.create(data)
+      : api.post<any, Backtest>('/backtests', data),
   
-  delete: (id: number) => 
-    api.delete(`/backtests/${id}`)
+  delete: (id: number) =>
+    DEMO_MODE
+      ? demoApi.backtestApi.delete(id)
+      : api.delete(`/backtests/${id}`)
 }
 
 // 监控API
 export const monitorApi = {
-  listRules: () => 
-    api.get<any, MonitorRule[]>('/monitor/rules'),
+  listRules: () =>
+    DEMO_MODE
+      ? demoApi.monitorApi.listRules()
+      : api.get<any, MonitorRule[]>('/monitor/rules'),
   
   createRule: (data: any) =>
-    api.post<any, MonitorRule>('/monitor/rules', data),
+    DEMO_MODE
+      ? demoApi.monitorApi.createRule(data)
+      : api.post<any, MonitorRule>('/monitor/rules', data),
   
   updateRule: (id: number, data: any) =>
-    api.put<any, MonitorRule>(`/monitor/rules/${id}`, data),
+    DEMO_MODE
+      ? demoApi.monitorApi.updateRule(id, data)
+      : api.put<any, MonitorRule>(`/monitor/rules/${id}`, data),
   
-  deleteRule: (id: number) => 
-    api.delete(`/monitor/rules/${id}`),
+  deleteRule: (id: number) =>
+    DEMO_MODE
+      ? demoApi.monitorApi.deleteRule(id)
+      : api.delete(`/monitor/rules/${id}`),
   
-  toggleRule: (id: number, _isActive: boolean) =>
-    api.post(`/monitor/rules/${id}/toggle`),
+  toggleRule: (id: number, isActive: boolean) =>
+    DEMO_MODE
+      ? demoApi.monitorApi.toggleRule(id, isActive)
+      : api.post(`/monitor/rules/${id}/toggle`),
   
-  getAlerts: () => 
-    api.get('/monitor/alerts'),
+  getAlerts: () =>
+    DEMO_MODE
+      ? demoApi.monitorApi.getAlerts()
+      : api.get('/monitor/alerts'),
   
   // 关注列表
-  getWatchlist: () => 
-    api.get<any, WatchlistItem[]>('/stocks/watchlist'),
+  getWatchlist: () =>
+    DEMO_MODE
+      ? demoApi.monitorApi.getWatchlist()
+      : api.get<any, WatchlistItem[]>('/stocks/watchlist'),
   
-  addToWatchlist: (symbol: string, notes?: string) => 
-    api.post<any, WatchlistItem>('/stocks/watchlist', { symbol, notes }),
+  addToWatchlist: (symbol: string, notes?: string) =>
+    DEMO_MODE
+      ? demoApi.monitorApi.addToWatchlist(symbol, notes)
+      : api.post<any, WatchlistItem>('/stocks/watchlist', { symbol, notes }),
   
-  removeFromWatchlist: (id: number) => 
-    api.delete(`/stocks/watchlist/${id}`)
+  removeFromWatchlist: (id: number) =>
+    DEMO_MODE
+      ? demoApi.monitorApi.removeFromWatchlist(id)
+      : api.delete(`/stocks/watchlist/${id}`)
 }
 
 export const aiApi = {
@@ -396,54 +491,97 @@ export const aiApi = {
       end?: string
       count?: number
       focus?: string
+      providerId?: string
+      model?: string
     }
   ) =>
-    api.post<any, StockAnalysisResult>(`/ai/analyze/stock/${symbol}`, payload ?? {})
+    DEMO_MODE
+      ? demoApi.aiApi.analyzeStock(symbol, payload)
+      : api.post<any, StockAnalysisResult>(`/ai/analyze/stock/${symbol}`, payload ?? {}),
+
+  chat: (
+    payload: {
+      question: string
+      symbol?: string
+      focus?: string
+      providerId?: string
+      model?: string
+    }
+  ) =>
+    DEMO_MODE
+      ? demoApi.aiApi.chat(payload)
+      : api.post<any, AiChatResult>('/ai/chat', payload)
 }
 
 // 配置API
 export const configApi = {
-  get: () => 
-    api.get<any, SystemConfig>('/config'),
+  get: () =>
+    DEMO_MODE
+      ? demoApi.configApi.get()
+      : api.get<any, SystemConfig>('/config'),
   
-  update: (data: Partial<SystemConfig>) => 
-    api.put('/config', data),
+  update: (data: Partial<SystemConfig>) =>
+    DEMO_MODE
+      ? demoApi.configApi.update(data)
+      : api.put('/config', data),
   
-  testEmail: () => 
-    api.post('/config/test/email'),
+  testEmail: () =>
+    DEMO_MODE
+      ? demoApi.configApi.testEmail()
+      : api.post('/config/test/email'),
   
-  testFeishu: () => 
-    api.post('/config/test/feishu'),
+  testFeishu: () =>
+    DEMO_MODE
+      ? demoApi.configApi.testFeishu()
+      : api.post('/config/test/feishu'),
   
-  testWechat: () => 
-    api.post('/config/test/wechat'),
+  testWechat: () =>
+    DEMO_MODE
+      ? demoApi.configApi.testWechat()
+      : api.post('/config/test/wechat'),
   
-  testLongBridge: () => 
-    api.post('/config/test/longbridge'),
+  testLongBridge: () =>
+    DEMO_MODE
+      ? demoApi.configApi.testLongBridge()
+      : api.post('/config/test/longbridge'),
 
   testOpenAi: () =>
-    api.post('/config/test/openai')
+    DEMO_MODE
+      ? demoApi.configApi.testOpenAi()
+      : api.post('/config/test/openai')
 }
 
 // 复盘API
 export const reviewApi = {
-  list: (params?: { startDate?: string; endDate?: string }) => 
-    api.get<any, ReviewRecord[]>('/reviews', { params }),
+  list: (params?: { startDate?: string; endDate?: string }) =>
+    DEMO_MODE
+      ? demoApi.reviewApi.list(params)
+      : api.get<any, ReviewRecord[]>('/reviews', { params }),
   
-  get: (id: number) => 
-    api.get<any, ReviewRecord>(`/reviews/${id}`),
+  get: (id: number) =>
+    DEMO_MODE
+      ? demoApi.reviewApi.get(id)
+      : api.get<any, ReviewRecord>(`/reviews/${id}`),
   
-  create: (data: Partial<ReviewRecord>) => 
-    api.post<any, ReviewRecord>('/reviews', data),
+  create: (data: Partial<ReviewRecord>) =>
+    DEMO_MODE
+      ? demoApi.reviewApi.create(data)
+      : api.post<any, ReviewRecord>('/reviews', data),
   
-  update: (id: number, data: Partial<ReviewRecord>) => 
-    api.put<any, ReviewRecord>(`/reviews/${id}`, data),
+  update: (id: number, data: Partial<ReviewRecord>) =>
+    DEMO_MODE
+      ? demoApi.reviewApi.update(id, data)
+      : api.put<any, ReviewRecord>(`/reviews/${id}`, data),
   
-  delete: (id: number) => 
-    api.delete(`/reviews/${id}`),
+  delete: (id: number) =>
+    DEMO_MODE
+      ? demoApi.reviewApi.delete(id)
+      : api.delete(`/reviews/${id}`),
   
-  getStats: (startDate?: string, endDate?: string) => 
-    api.get('/reviews/stats', { params: { startDate, endDate } })
+  getStats: (startDate?: string, endDate?: string) =>
+    DEMO_MODE
+      ? demoApi.reviewApi.getStats(startDate, endDate)
+      : api.get('/reviews/stats', { params: { startDate, endDate } })
 }
 
 export default api

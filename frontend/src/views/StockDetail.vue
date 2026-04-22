@@ -21,7 +21,7 @@
     <div class="price-overview">
       <div class="current-price">
         <span :class="['price', (quote?.change ?? 0) >= 0 ? 'price-up' : 'price-down']">
-          ${{ quote?.current?.toFixed(2) || '-' }}
+          ${{ formatPrice(quote?.current) }}
         </span>
         <span :class="['change', (quote?.change ?? 0) >= 0 ? 'price-up' : 'price-down']">
           {{ formatChange(quote?.change) }} ({{ formatPercent(quote?.changePercent) }})
@@ -30,19 +30,19 @@
       <div class="price-stats">
         <div class="stat-item">
           <span class="label">开盘</span>
-          <span class="value">${{ quote?.open?.toFixed(2) || '-' }}</span>
+          <span class="value">${{ formatPrice(quote?.open) }}</span>
         </div>
         <div class="stat-item">
           <span class="label">最高</span>
-          <span class="value">${{ quote?.high?.toFixed(2) || '-' }}</span>
+          <span class="value">${{ formatPrice(quote?.high) }}</span>
         </div>
         <div class="stat-item">
           <span class="label">最低</span>
-          <span class="value">${{ quote?.low?.toFixed(2) || '-' }}</span>
+          <span class="value">${{ formatPrice(quote?.low) }}</span>
         </div>
         <div class="stat-item">
           <span class="label">昨收</span>
-          <span class="value">${{ quote?.previousClose?.toFixed(2) || '-' }}</span>
+          <span class="value">${{ formatPrice(quote?.previousClose) }}</span>
         </div>
         <div class="stat-item">
           <span class="label">成交量</span>
@@ -105,23 +105,23 @@
             </div>
             <div class="info-item">
               <span class="label">市盈率</span>
-              <span class="value">{{ stock?.pe?.toFixed(2) || '-' }}</span>
+              <span class="value">{{ formatPlain(stock?.pe) }}</span>
             </div>
             <div class="info-item">
               <span class="label">每股收益</span>
-              <span class="value">${{ stock?.eps?.toFixed(2) || '-' }}</span>
+              <span class="value">${{ formatPrice(stock?.eps) }}</span>
             </div>
             <div class="info-item">
               <span class="label">股息率</span>
-              <span class="value">{{ stock?.dividend?.toFixed(2) || '-' }}%</span>
+              <span class="value">{{ formatPercentValue(stock?.dividend) }}</span>
             </div>
             <div class="info-item">
               <span class="label">52周最高</span>
-              <span class="value">${{ stock?.high52Week?.toFixed(2) || '-' }}</span>
+              <span class="value">${{ formatPrice(stock?.high52Week) }}</span>
             </div>
             <div class="info-item">
               <span class="label">52周最低</span>
-              <span class="value">${{ stock?.low52Week?.toFixed(2) || '-' }}</span>
+              <span class="value">${{ formatPrice(stock?.low52Week) }}</span>
             </div>
           </div>
         </div>
@@ -142,6 +142,34 @@
             :rows="2"
             placeholder="可选：输入分析关注点，如“短线压力位和风险控制”"
           />
+          <el-select
+            v-if="aiProviders.length > 0"
+            v-model="selectedAiProviderId"
+            class="ai-provider-select"
+            placeholder="选择模型源"
+            size="small"
+          >
+            <el-option
+              v-for="provider in aiProviders"
+              :key="provider.id"
+              :label="provider.name"
+              :value="provider.id"
+            />
+          </el-select>
+          <el-select
+            v-if="aiModelOptions.length > 0"
+            v-model="selectedAiModel"
+            class="ai-provider-select"
+            placeholder="选择模型"
+            size="small"
+          >
+            <el-option
+              v-for="model in aiModelOptions"
+              :key="model"
+              :label="model"
+              :value="model"
+            />
+          </el-select>
           <div class="ai-result">
             <el-skeleton v-if="aiLoading" :rows="6" animated />
             <template v-else-if="aiResult">
@@ -159,9 +187,7 @@
                   {{ item.title }}
                 </el-button>
               </div>
-              <el-scrollbar class="ai-text-scroll" max-height="320px">
-                <div class="ai-text" v-html="aiHtml" />
-              </el-scrollbar>
+              <div class="ai-text ai-text-full" v-html="aiHtml" />
             </template>
             <el-empty v-else description="点击“生成分析”获取 AI 观点" :image-size="72" />
           </div>
@@ -224,9 +250,9 @@ import {
 import VChart from 'vue-echarts'
 import { CopyDocument, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { aiApi, stockApi } from '@/api'
+import { aiApi, configApi, stockApi } from '@/api'
 import { useAppStore } from '@/stores/app'
-import type { Candlestick, Stock, StockAnalysisResult, StockQuote } from '@/types'
+import type { AiProviderConfig, Candlestick, Stock, StockAnalysisResult, StockQuote, SystemConfig } from '@/types'
 
 use([
   CanvasRenderer,
@@ -252,6 +278,9 @@ const indicators = ref(['MA'])
 const aiLoading = ref(false)
 const aiFocus = ref('')
 const aiResult = ref<StockAnalysisResult | null>(null)
+const aiProviders = ref<AiProviderConfig[]>([])
+const selectedAiProviderId = ref('')
+const selectedAiModel = ref('')
 const requestSeed = ref(0)
 
 const tradeForm = ref({
@@ -273,6 +302,73 @@ type AiHeading = {
 const aiParsed = computed(() => parseAiMarkdown(aiResult.value?.analysis || ''))
 const aiHtml = computed(() => aiParsed.value.html)
 const aiToc = computed(() => aiParsed.value.toc.filter(item => item.level <= 3))
+
+function normalizeAiProviders(openAi?: SystemConfig['openAi']): AiProviderConfig[] {
+  const rawProviders = Array.isArray(openAi?.providers) ? openAi.providers : []
+  const providers = rawProviders
+    .map((item, index) => ({
+      id: String(item?.id || `provider-${index + 1}`),
+      name: String(item?.name || `模型源 ${index + 1}`),
+      apiKey: String(item?.apiKey || ''),
+      baseUrl: String(item?.baseUrl || '').trim() || 'https://api.openai.com/v1',
+      model: String(item?.model || '').trim() || 'gpt-5-mini'
+    }))
+    .filter((item) => item.id)
+
+  if (providers.length > 0) {
+    return providers
+  }
+
+  return [
+    {
+      id: 'default',
+      name: '默认模型源',
+      apiKey: String(openAi?.apiKey || ''),
+      baseUrl: String(openAi?.baseUrl || '').trim() || 'https://api.openai.com/v1',
+      model: String(openAi?.model || '').trim() || 'gpt-5-mini'
+    }
+  ]
+}
+
+function parseModelCandidates(raw: string): string[] {
+  const list = String(raw || '')
+    .split(/[\n,;|]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  return Array.from(new Set(list))
+}
+
+const currentAiProvider = computed(() => {
+  return aiProviders.value.find((item) => item.id === selectedAiProviderId.value) || aiProviders.value[0] || null
+})
+
+const aiModelOptions = computed(() => {
+  const list = parseModelCandidates(currentAiProvider.value?.model || '')
+  return list.length > 0 ? list : ['gpt-5-mini']
+})
+
+watch(currentAiProvider, () => {
+  if (!aiModelOptions.value.includes(selectedAiModel.value)) {
+    selectedAiModel.value = aiModelOptions.value[0] || ''
+  }
+})
+
+async function loadAiProviders() {
+  try {
+    const config = await configApi.get()
+    const providers = normalizeAiProviders(config?.openAi)
+    aiProviders.value = providers
+    const preferred = String(config?.openAi?.activeProviderId || '').trim()
+    selectedAiProviderId.value = providers.some((item) => item.id === preferred)
+      ? preferred
+      : providers[0]?.id || ''
+    selectedAiModel.value = aiModelOptions.value[0] || ''
+  } catch {
+    aiProviders.value = []
+    selectedAiProviderId.value = ''
+    selectedAiModel.value = ''
+  }
+}
 
 const klineChartOption = computed(() => {
   const dates = klineData.value.map(k => k.time)
@@ -547,10 +643,14 @@ async function runAiAnalysis() {
       start: range?.start,
       end: range?.end,
       count: 240,
-      focus: aiFocus.value
+      focus: aiFocus.value,
+      providerId: selectedAiProviderId.value || undefined,
+      model: selectedAiModel.value || undefined
     })
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || 'AI 分析失败，请检查配置')
+    const message = error?.response?.data?.message || error?.message || 'AI 分析失败，请检查配置'
+    const modelTip = selectedAiModel.value ? `（当前模型：${selectedAiModel.value}）` : ''
+    ElMessage.error(`${message}${modelTip}`)
   } finally {
     aiLoading.value = false
   }
@@ -573,13 +673,32 @@ function submitTrade() {
   ElMessage.info('交易功能开发中...')
 }
 
+function isValidNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function formatPrice(value?: number): string {
+  if (!isValidNumber(value)) return '-'
+  return value.toFixed(2)
+}
+
+function formatPlain(value?: number): string {
+  if (!isValidNumber(value)) return '-'
+  return value.toFixed(2)
+}
+
+function formatPercentValue(value?: number): string {
+  if (!isValidNumber(value)) return '-'
+  return `${value.toFixed(2)}%`
+}
+
 function formatChange(value?: number): string {
-  if (value === undefined) return '-'
+  if (!isValidNumber(value)) return '-'
   return (value >= 0 ? '+' : '') + value.toFixed(2)
 }
 
 function formatPercent(value?: number): string {
-  if (value === undefined) return '-'
+  if (!isValidNumber(value)) return '-'
   return (value >= 0 ? '+' : '') + value.toFixed(2) + '%'
 }
 
@@ -749,6 +868,7 @@ watch(symbol, () => {
     customRange.value = []
   }
   aiResult.value = null
+  loadAiProviders().catch(() => undefined)
   refreshData(false)
 }, { immediate: true })
 
@@ -952,6 +1072,11 @@ watch([klinePeriod, customRange], () => {
       align-items: center;
     }
 
+    .ai-provider-select {
+      width: 100%;
+      margin-top: 10px;
+    }
+
     .ai-result {
       margin-top: 12px;
     }
@@ -1044,21 +1169,8 @@ watch([klinePeriod, customRange], () => {
       }
     }
 
-    .ai-text-scroll {
-      border-radius: 8px;
-      border: 1px solid var(--qt-border);
-      background: color-mix(in srgb, var(--qt-card-bg) 85%, #64748b 15%);
-
-      :deep(.el-scrollbar__wrap) {
-        overflow-y: auto;
-        overscroll-behavior: contain;
-        -webkit-overflow-scrolling: touch;
-        touch-action: pan-y;
-      }
-
-      :deep(.el-scrollbar__view) {
-        min-height: 100%;
-      }
+    .ai-text-full {
+      margin-top: 6px;
     }
   }
 

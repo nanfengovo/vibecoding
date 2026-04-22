@@ -52,9 +52,42 @@ public class AiController : ControllerBase
                 {
                     Symbol = normalizedSymbol,
                     Focus = request?.Focus ?? string.Empty,
+                    ProviderId = request?.ProviderId ?? string.Empty,
+                    Model = request?.Model ?? string.Empty,
                     Stock = stock,
                     Quote = quote,
                     Klines = klines
+                },
+                cancellationToken);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpPost("chat")]
+    public async Task<ActionResult<AiChatResult>> Chat(
+        [FromBody] AiChatRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request?.Question))
+        {
+            return BadRequest(new { message = "问题不能为空。" });
+        }
+
+        try
+        {
+            var result = await _aiAnalysisService.ChatAsync(
+                new AiChatInput
+                {
+                    Question = request.Question,
+                    Symbol = request.Symbol ?? string.Empty,
+                    Focus = request.Focus ?? string.Empty,
+                    ProviderId = request.ProviderId ?? string.Empty,
+                    Model = request.Model ?? string.Empty
                 },
                 cancellationToken);
 
@@ -74,4 +107,15 @@ public sealed class AnalyzeStockRequest
     public DateTime? End { get; set; }
     public int? Count { get; set; }
     public string Focus { get; set; } = string.Empty;
+    public string ProviderId { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+}
+
+public sealed class AiChatRequest
+{
+    public string Question { get; set; } = string.Empty;
+    public string? Symbol { get; set; }
+    public string? Focus { get; set; }
+    public string? ProviderId { get; set; }
+    public string? Model { get; set; }
 }

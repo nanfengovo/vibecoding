@@ -10,6 +10,7 @@ namespace QuantTrading.Api.Services.AI;
 
 public sealed class OpenAiAnalysisService : IAiAnalysisService
 {
+    private const string MaskedValue = "******";
     private readonly QuantTradingDbContext _dbContext;
     private readonly IConfiguration _configuration;
     private readonly ILogger<OpenAiAnalysisService> _logger;
@@ -36,17 +37,18 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             };
         }
 
-        if (string.IsNullOrWhiteSpace(runtime.ApiKey))
+        var provider = ResolveProvider(runtime, runtime.ActiveProviderId);
+        if (string.IsNullOrWhiteSpace(provider.ApiKey))
         {
             return new AiConnectionTestResult
             {
                 Success = false,
-                Message = "OpenAI API Key 未配置。"
+                Message = "默认模型源未配置 API Key。"
             };
         }
 
-        var (success, content, error) = await SendChatCompletionAsync(
-            runtime,
+        var (success, content, error, _) = await SendChatCompletionAsync(
+            provider,
             "你是交易分析助手。请只回复“连接成功”。",
             "回复连接成功",
             cancellationToken);
@@ -63,7 +65,9 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         return new AiConnectionTestResult
         {
             Success = true,
-            Message = string.IsNullOrWhiteSpace(content) ? "OpenAI 连接成功。" : $"OpenAI 连接成功：{content.Trim()}"
+            Message = string.IsNullOrWhiteSpace(content)
+                ? $"连接成功（{provider.Name}）"
+                : $"{provider.Name} 连接成功：{content.Trim()}"
         };
     }
 
@@ -77,19 +81,22 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             throw new InvalidOperationException("OpenAI 分析未启用，请先在设置中开启。");
         }
 
-        if (string.IsNullOrWhiteSpace(runtime.ApiKey))
+        var provider = ResolveProvider(runtime, input.ProviderId);
+        if (string.IsNullOrWhiteSpace(provider.ApiKey))
         {
-            throw new InvalidOperationException("OpenAI API Key 未配置。");
+            throw new InvalidOperationException($"模型源“{provider.Name}”未配置 API Key。");
         }
 
         var systemPrompt = "你是专业股票分析助手。输出必须简洁、结构化、可执行，使用中文。不要提供确定性收益承诺。";
         var userPrompt = BuildStockPrompt(input);
 
-        var (success, content, error) = await SendChatCompletionAsync(
-            runtime,
+        var modelOverride = string.IsNullOrWhiteSpace(input.Model) ? null : input.Model.Trim();
+        var (success, content, error, modelUsed) = await SendChatCompletionAsync(
+            provider,
             systemPrompt,
             userPrompt,
-            cancellationToken);
+            cancellationToken,
+            modelOverride);
 
         if (!success || string.IsNullOrWhiteSpace(content))
         {
@@ -100,69 +107,222 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         return new StockAnalysisResult
         {
             Symbol = input.Symbol,
-            Model = runtime.Model,
+            Model = string.IsNullOrWhiteSpace(modelUsed) ? provider.Model : modelUsed,
             Analysis = content.Trim(),
             GeneratedAt = DateTime.UtcNow
         };
     }
 
-    private async Task<(bool Success, string Content, string Error)> SendChatCompletionAsync(
-        OpenAiRuntimeConfig runtime,
+    public async Task<AiChatResult> ChatAsync(
+        AiChatInput input,
+        CancellationToken cancellationToken = default)
+    {
+        var runtime = await GetRuntimeConfigAsync(cancellationToken);
+        if (!runtime.Enabled)
+        {
+            throw new InvalidOperationException("OpenAI 分析未启用，请先在设置中开启。");
+        }
+
+        var provider = ResolveProvider(runtime, input.ProviderId);
+        if (string.IsNullOrWhiteSpace(provider.ApiKey))
+        {
+            throw new InvalidOperationException($"模型源“{provider.Name}”未配置 API Key。");
+        }
+
+        var question = (input.Question ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            throw new InvalidOperationException("问题不能为空。");
+        }
+
+        var systemPrompt = "你是专业交易助手。请给出结构化、简洁、可执行的中文回答，并包含风险提示。";
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(input.Symbol))
+        {
+            sb.AppendLine($"标的：{input.Symbol.Trim().ToUpperInvariant()}");
+        }
+        if (!string.IsNullOrWhiteSpace(input.Focus))
+        {
+            sb.AppendLine($"关注点：{input.Focus.Trim()}");
+        }
+        sb.AppendLine($"用户问题：{question}");
+        sb.AppendLine();
+        sb.AppendLine("请按“结论 / 依据 / 风险提示”结构回复。");
+        sb.AppendLine("注意：不构成投资建议。");
+
+        var modelOverride = (input.Model ?? string.Empty).Trim();
+        var (success, content, error, modelUsed) = await SendChatCompletionAsync(
+            provider,
+            systemPrompt,
+            sb.ToString(),
+            cancellationToken,
+            modelOverride);
+
+        if (!success || string.IsNullOrWhiteSpace(content))
+        {
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(error) ? "AI 聊天调用失败，请稍后重试。" : error);
+        }
+
+        return new AiChatResult
+        {
+            Model = string.IsNullOrWhiteSpace(modelUsed)
+                ? (string.IsNullOrWhiteSpace(modelOverride) ? provider.Model : modelOverride)
+                : modelUsed,
+            Content = content.Trim(),
+            GeneratedAt = DateTime.UtcNow
+        };
+    }
+
+    private async Task<(bool Success, string Content, string Error, string Model)> SendChatCompletionAsync(
+        AiProviderRuntimeConfig provider,
         string systemPrompt,
         string userPrompt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? modelOverride = null)
     {
+        var models = ParseModelCandidates(modelOverride)
+            .Concat(ParseModelCandidates(provider.Model))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (!models.Any())
+        {
+            return (false, string.Empty, "请先配置至少一个可用模型。", string.Empty);
+        }
+
+        var errors = new List<string>();
+        foreach (var model in models)
+        {
+            var completion = await TrySendSingleModelCompletionAsync(
+                provider,
+                systemPrompt,
+                userPrompt,
+                cancellationToken,
+                model);
+
+            if (completion.Success)
+            {
+                return completion;
+            }
+
+            if (!string.IsNullOrWhiteSpace(completion.Error))
+            {
+                errors.Add($"{model}: {completion.Error}");
+            }
+        }
+
+        return (
+            false,
+            string.Empty,
+            errors.Count == 0 ? "AI 调用失败，请稍后重试。" : $"所有模型调用失败：{string.Join(" | ", errors)}",
+            string.Empty);
+    }
+
+    private async Task<(bool Success, string Content, string Error, string Model)> TrySendSingleModelCompletionAsync(
+        AiProviderRuntimeConfig provider,
+        string systemPrompt,
+        string userPrompt,
+        CancellationToken cancellationToken,
+        string model)
+    {
+        var disableMaxTokens = false;
         try
         {
             using var client = new HttpClient
             {
                 Timeout = TimeSpan.FromSeconds(45),
-                BaseAddress = new Uri(runtime.BaseUrl.TrimEnd('/') + "/")
+                BaseAddress = new Uri(provider.BaseUrl.TrimEnd('/') + "/")
             };
 
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", runtime.ApiKey);
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", provider.ApiKey);
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-            var payload = new
+            while (true)
             {
-                model = runtime.Model,
-                temperature = 0.3,
-                max_tokens = 900,
-                messages = new object[]
+                var payload = BuildChatPayload(model, systemPrompt, userPrompt, disableMaxTokens);
+                var request = new StringContent(
+                    JsonConvert.SerializeObject(payload),
+                    Encoding.UTF8,
+                    "application/json");
+
+                var response = await client.PostAsync("chat/completions", request, cancellationToken);
+                var raw = await response.Content.ReadAsStringAsync(cancellationToken);
+
+                if (!response.IsSuccessStatusCode)
                 {
-                    new { role = "system", content = systemPrompt },
-                    new { role = "user", content = userPrompt }
+                    var errorText = TryReadOpenAiError(raw);
+                    if (!disableMaxTokens && ShouldRetryWithoutMaxTokens(errorText))
+                    {
+                        disableMaxTokens = true;
+                        continue;
+                    }
+
+                    _logger.LogWarning("OpenAI API error: {StatusCode} - {Error}", response.StatusCode, errorText);
+                    return (false, string.Empty, $"接口错误({(int)response.StatusCode}) {errorText}", model);
                 }
-            };
 
-            var request = new StringContent(
-                JsonConvert.SerializeObject(payload),
-                Encoding.UTF8,
-                "application/json");
-
-            var response = await client.PostAsync("chat/completions", request, cancellationToken);
-            var raw = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                var errorText = TryReadOpenAiError(raw);
-                _logger.LogWarning("OpenAI API error: {StatusCode} - {Error}", response.StatusCode, errorText);
-                return (false, string.Empty, $"OpenAI 请求失败：{errorText}");
+                var json = JObject.Parse(raw);
+                var content = json["choices"]?.FirstOrDefault()?["message"]?["content"]?.ToString() ?? string.Empty;
+                var modelUsed = json["model"]?.ToString() ?? model;
+                return (true, content, string.Empty, modelUsed);
             }
-
-            var json = JObject.Parse(raw);
-            var content = json["choices"]?.FirstOrDefault()?["message"]?["content"]?.ToString() ?? string.Empty;
-            return (true, content, string.Empty);
         }
         catch (TaskCanceledException)
         {
-            return (false, string.Empty, "OpenAI 请求超时，请稍后重试。");
+            return (false, string.Empty, "请求超时", model);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "OpenAI analysis request failed");
-            return (false, string.Empty, $"OpenAI 调用异常：{ex.Message}");
+            return (false, string.Empty, $"调用异常：{ex.Message}", model);
         }
+    }
+
+    private static object BuildChatPayload(
+        string model,
+        string systemPrompt,
+        string userPrompt,
+        bool disableMaxTokens)
+    {
+        var payload = new JObject
+        {
+            ["model"] = model,
+            ["temperature"] = 0.3,
+            ["messages"] = new JArray
+            {
+                new JObject
+                {
+                    ["role"] = "system",
+                    ["content"] = systemPrompt
+                },
+                new JObject
+                {
+                    ["role"] = "user",
+                    ["content"] = userPrompt
+                }
+            }
+        };
+
+        if (!disableMaxTokens)
+        {
+            payload["max_tokens"] = 900;
+        }
+
+        return payload;
+    }
+
+    private static bool ShouldRetryWithoutMaxTokens(string errorText)
+    {
+        if (string.IsNullOrWhiteSpace(errorText))
+        {
+            return false;
+        }
+
+        var normalized = errorText.ToLowerInvariant();
+        return normalized.Contains("max_tokens")
+            && normalized.Contains("max_completion_tokens")
+            && normalized.Contains("cannot both be set");
     }
 
     private static string TryReadOpenAiError(string raw)
@@ -255,13 +415,103 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             .ToListAsync(cancellationToken);
 
         var map = openAiConfigs.ToDictionary(c => c.Key, c => c.Value, StringComparer.OrdinalIgnoreCase);
+        var providers = ParseProviders(map);
+        var activeProviderId = GetValue(map, "ActiveProviderId");
+
+        if (!providers.Any())
+        {
+            providers.Add(new AiProviderRuntimeConfig
+            {
+                Id = "default",
+                Name = "默认模型源",
+                ApiKey = GetValue(map, "ApiKey", _configuration["OpenAI:ApiKey"]),
+                BaseUrl = GetValue(map, "BaseUrl", _configuration["OpenAI:BaseUrl"], "https://api.openai.com/v1"),
+                Model = GetValue(map, "Model", _configuration["OpenAI:Model"], "gpt-4o-mini")
+            });
+        }
+
+        if (!providers.Any(p => string.Equals(p.Id, activeProviderId, StringComparison.OrdinalIgnoreCase)))
+        {
+            activeProviderId = providers[0].Id;
+        }
+
         return new OpenAiRuntimeConfig
         {
             Enabled = ParseBool(GetValue(map, "Enabled", _configuration["OpenAI:Enabled"]), false),
-            ApiKey = GetValue(map, "ApiKey", _configuration["OpenAI:ApiKey"]),
-            BaseUrl = GetValue(map, "BaseUrl", _configuration["OpenAI:BaseUrl"], "https://api.openai.com/v1"),
-            Model = GetValue(map, "Model", _configuration["OpenAI:Model"], "gpt-4o-mini")
+            Providers = providers,
+            ActiveProviderId = activeProviderId
         };
+    }
+
+    private static List<AiProviderRuntimeConfig> ParseProviders(IReadOnlyDictionary<string, string> map)
+    {
+        var providersRaw = GetValue(map, "Providers");
+        if (string.IsNullOrWhiteSpace(providersRaw))
+        {
+            return new List<AiProviderRuntimeConfig>();
+        }
+
+        try
+        {
+            var array = JArray.Parse(providersRaw);
+            var providers = new List<AiProviderRuntimeConfig>();
+            foreach (var row in array)
+            {
+                if (row is not JObject providerObj)
+                {
+                    continue;
+                }
+
+                var id = providerObj["id"]?.ToString()?.Trim();
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    continue;
+                }
+
+                var apiKey = providerObj["apiKey"]?.ToString()?.Trim() ?? string.Empty;
+                if (string.Equals(apiKey, MaskedValue, StringComparison.Ordinal))
+                {
+                    apiKey = string.Empty;
+                }
+
+                providers.Add(new AiProviderRuntimeConfig
+                {
+                    Id = id,
+                    Name = providerObj["name"]?.ToString()?.Trim() ?? id,
+                    ApiKey = apiKey,
+                    BaseUrl = providerObj["baseUrl"]?.ToString()?.Trim() ?? "https://api.openai.com/v1",
+                    Model = providerObj["model"]?.ToString()?.Trim() ?? "gpt-4o-mini"
+                });
+            }
+
+            return providers;
+        }
+        catch
+        {
+            return new List<AiProviderRuntimeConfig>();
+        }
+    }
+
+    private static AiProviderRuntimeConfig ResolveProvider(OpenAiRuntimeConfig runtime, string? preferredProviderId)
+    {
+        var preferredId = string.IsNullOrWhiteSpace(preferredProviderId)
+            ? runtime.ActiveProviderId
+            : preferredProviderId.Trim();
+
+        var provider = runtime.Providers
+            .FirstOrDefault(item => item.Id.Equals(preferredId, StringComparison.OrdinalIgnoreCase));
+
+        return provider ?? runtime.Providers.First();
+    }
+
+    private static List<string> ParseModelCandidates(string? raw)
+    {
+        return (raw ?? string.Empty)
+            .Split(new[] { ',', ';', '\n', '|' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(item => item.Trim())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static string GetValue(
@@ -291,6 +541,14 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
     private sealed class OpenAiRuntimeConfig
     {
         public bool Enabled { get; init; }
+        public List<AiProviderRuntimeConfig> Providers { get; init; } = new();
+        public string ActiveProviderId { get; init; } = string.Empty;
+    }
+
+    private sealed class AiProviderRuntimeConfig
+    {
+        public string Id { get; init; } = "default";
+        public string Name { get; init; } = "默认模型源";
         public string ApiKey { get; init; } = string.Empty;
         public string BaseUrl { get; init; } = "https://api.openai.com/v1";
         public string Model { get; init; } = "gpt-4o-mini";

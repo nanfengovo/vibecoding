@@ -16,6 +16,15 @@
       </div>
     </div>
 
+    <el-alert
+      v-if="appStore.quoteError"
+      class="quote-alert"
+      type="warning"
+      show-icon
+      :closable="false"
+      :title="`行情接口异常：${appStore.quoteError}`"
+    />
+
     <!-- 监控规则列表 -->
     <div class="card rules-section">
       <div class="card-header">
@@ -126,8 +135,16 @@
             <span class="notes">{{ row.notes || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="80" fixed="right">
+        <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
+            <el-button
+              link
+              type="primary"
+              size="small"
+              @click.stop="showCompanyDetail(row.symbol)"
+            >
+              详情
+            </el-button>
             <el-button 
               link 
               type="danger" 
@@ -170,9 +187,80 @@
           <div class="stock-volume">
             成交量: {{ formatVolume(getQuote(item.symbol)?.volume) }}
           </div>
+          <div class="stock-actions">
+            <el-button link type="primary" size="small" @click.stop="showCompanyDetail(item.symbol)">详情</el-button>
+          </div>
         </div>
       </div>
     </div>
+
+    <el-dialog
+      v-model="showDetailDialog"
+      title="公司详情"
+      width="760px"
+      destroy-on-close
+      @closed="resetCompanyProfile"
+    >
+      <el-skeleton v-if="detailLoading" :rows="8" animated />
+      <template v-else-if="selectedStockDetail">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="代码">{{ selectedStockDetail.symbol }}</el-descriptions-item>
+          <el-descriptions-item label="名称">{{ selectedStockDetail.name }}</el-descriptions-item>
+          <el-descriptions-item label="市场">{{ selectedStockDetail.market || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="现价">{{ formatPrice(selectedStockDetail.currentPrice) }}</el-descriptions-item>
+          <el-descriptions-item label="昨收">{{ formatPrice(selectedStockDetail.previousClose) }}</el-descriptions-item>
+          <el-descriptions-item label="涨跌幅">{{ formatPercent(selectedStockDetail.changePercent) }}</el-descriptions-item>
+          <el-descriptions-item label="开盘">{{ formatPrice(selectedStockDetail.open) }}</el-descriptions-item>
+          <el-descriptions-item label="最高">{{ formatPrice(selectedStockDetail.high) }}</el-descriptions-item>
+          <el-descriptions-item label="最低">{{ formatPrice(selectedStockDetail.low) }}</el-descriptions-item>
+          <el-descriptions-item label="成交量">{{ formatVolume(selectedStockDetail.volume) }}</el-descriptions-item>
+          <el-descriptions-item label="市值">{{ formatMarketCap(selectedStockDetail.marketCap) }}</el-descriptions-item>
+          <el-descriptions-item label="市盈率">{{ formatPlainNumber(selectedStockDetail.pe) }}</el-descriptions-item>
+          <el-descriptions-item label="每股收益">{{ formatPlainNumber(selectedStockDetail.eps) }}</el-descriptions-item>
+          <el-descriptions-item label="股息率">{{ formatPercent(selectedStockDetail.dividend) }}</el-descriptions-item>
+          <el-descriptions-item label="52周最高">{{ formatPrice(selectedStockDetail.high52Week) }}</el-descriptions-item>
+          <el-descriptions-item label="52周最低">{{ formatPrice(selectedStockDetail.low52Week) }}</el-descriptions-item>
+          <el-descriptions-item label="平均成交量">{{ formatVolume(selectedStockDetail.avgVolume) }}</el-descriptions-item>
+          <el-descriptions-item label="行情时间">{{ formatDateTime(selectedStockDetail.updatedAt) }}</el-descriptions-item>
+        </el-descriptions>
+
+        <div class="company-profile-block">
+          <div class="company-profile-header">
+            <h4>公司信息</h4>
+            <el-button size="small" :loading="companyProfileLoading" @click="loadCompanyProfile(selectedStockDetail.symbol)">
+              获取公司信息
+            </el-button>
+          </div>
+          <el-skeleton v-if="companyProfileLoading" :rows="5" animated />
+          <template v-else-if="companyProfile">
+            <div class="company-overview">
+              {{ companyProfile.overview || '暂无公司简介。' }}
+            </div>
+            <el-descriptions
+              v-if="companyProfile.fields.length > 0"
+              :column="2"
+              border
+              size="small"
+              class="company-extra-fields"
+            >
+              <el-descriptions-item
+                v-for="item in companyProfile.fields"
+                :key="`${item.key}-${item.value}`"
+                :label="item.key"
+              >
+                {{ item.value }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <div v-if="companyProfile.sourceUrl" class="company-source">
+              来源：
+              <el-link :href="companyProfile.sourceUrl" target="_blank" type="primary">Longbridge</el-link>
+            </div>
+          </template>
+          <el-empty v-else description="点击“获取公司信息”拉取公司资料" :image-size="60" />
+        </div>
+      </template>
+      <el-empty v-else description="暂无可展示的公司信息" :image-size="72" />
+    </el-dialog>
 
     <!-- 添加股票对话框 -->
     <el-dialog v-model="showAddDialog" title="添加关注" width="500px">
@@ -181,7 +269,7 @@
           <el-autocomplete
             v-model="addForm.symbol"
             :fetch-suggestions="searchSuggestions"
-            placeholder="输入股票代码或名称搜索"
+            placeholder="输入代码或名称（如 AAPL / 00700 / 600519.SH）"
             style="width: 100%"
             @select="handleSelectSuggestion"
           >
@@ -192,6 +280,9 @@
               </div>
             </template>
           </el-autocomplete>
+          <div class="symbol-hint">
+            支持跨市场代码：`US`（AAPL 或 AAPL.US）、`HK`（00700 或 00700.HK）、`A股`（600519.SH / 000001.SZ）。
+          </div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="addForm.notes" type="textarea" :rows="3" placeholder="可选备注" />
@@ -271,9 +362,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, Plus, Delete, List, Grid } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import dayjs from 'dayjs'
 import { useAppStore } from '@/stores/app'
 import { stockApi, monitorApi } from '@/api'
-import type { MonitorCondition, MonitorRule, NotificationChannel, StockQuote } from '@/types'
+import type { CompanyProfile, MonitorCondition, MonitorRule, NotificationChannel, Stock, StockQuote } from '@/types'
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -282,6 +374,11 @@ const searchQuery = ref('')
 const viewMode = ref<'table' | 'card'>('table')
 const showAddDialog = ref(false)
 const showRuleDialog = ref(false)
+const showDetailDialog = ref(false)
+const detailLoading = ref(false)
+const selectedStockDetail = ref<Stock | null>(null)
+const companyProfileLoading = ref(false)
+const companyProfile = ref<CompanyProfile | null>(null)
 const adding = ref(false)
 const savingRule = ref(false)
 const monitorRules = ref<MonitorRule[]>([])
@@ -312,7 +409,15 @@ const filteredWatchlist = computed(() => {
 })
 
 function getQuote(symbol: string): StockQuote | undefined {
-  return appStore.quotes.get(symbol)
+  const normalized = String(symbol || '').trim().toUpperCase()
+  if (!normalized) {
+    return undefined
+  }
+
+  return appStore.quotes.get(normalized)
+    || appStore.quotes.get(normalized.split('.')[0])
+    || appStore.quotes.get(`${normalized}.US`)
+    || appStore.quotes.get(`${normalized}.HK`)
 }
 
 function toNumber(value: unknown): number | null {
@@ -364,6 +469,29 @@ function formatVolume(value?: number): string {
   return value.toString()
 }
 
+function formatMarketCap(value?: number): string {
+  if (!value) return '-'
+  if (value >= 1000000000000) return (value / 1000000000000).toFixed(2) + 'T'
+  if (value >= 1000000000) return (value / 1000000000).toFixed(2) + 'B'
+  if (value >= 1000000) return (value / 1000000).toFixed(2) + 'M'
+  return value.toFixed(2)
+}
+
+function formatPlainNumber(value?: number): string {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) {
+    return '-'
+  }
+  return Number(value).toFixed(2)
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) {
+    return '-'
+  }
+  const parsed = dayjs(value)
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm:ss') : '-'
+}
+
 function formatPrice(value?: number | null): string {
   if (value === null || value === undefined) {
     return '-'
@@ -401,10 +529,13 @@ function handleSelectSuggestion(item: any) {
 }
 
 async function addStock() {
-  if (!addForm.value.symbol) {
+  const normalized = String(addForm.value.symbol || '').trim().toUpperCase()
+  if (!normalized) {
     ElMessage.warning('请输入股票代码')
     return
   }
+
+  addForm.value.symbol = normalized
   adding.value = true
   try {
     await appStore.addToWatchlist(addForm.value.symbol, addForm.value.notes)
@@ -412,7 +543,10 @@ async function addStock() {
     showAddDialog.value = false
     addForm.value = { symbol: '', notes: '' }
   } catch (error) {
-    ElMessage.error('添加失败')
+    const message = (error as any)?.response?.data?.message
+      || (error as Error)?.message
+      || '添加失败'
+    ElMessage.error(message)
   } finally {
     adding.value = false
   }
@@ -424,6 +558,54 @@ async function removeStock(id: number) {
     await appStore.removeFromWatchlist(id)
     ElMessage.success('已移除')
   } catch {}
+}
+
+async function showCompanyDetail(symbol: string) {
+  const normalized = String(symbol || '').trim()
+  if (!normalized) {
+    return
+  }
+
+  showDetailDialog.value = true
+  detailLoading.value = true
+  companyProfileLoading.value = false
+  companyProfile.value = null
+  try {
+    selectedStockDetail.value = await stockApi.getDetail(normalized)
+    await loadCompanyProfile(normalized)
+  } catch (error) {
+    const message = (error as any)?.response?.data?.message
+      || (error as Error)?.message
+      || '加载公司详情失败'
+    ElMessage.error(message)
+    selectedStockDetail.value = null
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function loadCompanyProfile(symbol: string) {
+  const normalized = String(symbol || '').trim()
+  if (!normalized) {
+    return
+  }
+
+  companyProfileLoading.value = true
+  try {
+    companyProfile.value = await stockApi.getCompanyProfile(normalized)
+  } catch (error) {
+    const message = (error as any)?.response?.data?.message
+      || (error as Error)?.message
+      || '获取公司信息失败'
+    ElMessage.error(message)
+  } finally {
+    companyProfileLoading.value = false
+  }
+}
+
+function resetCompanyProfile() {
+  companyProfileLoading.value = false
+  companyProfile.value = null
 }
 
 function handleRowClick(row: any) {
@@ -568,6 +750,10 @@ onMounted(async () => {
 
 <style lang="scss" scoped>
 .watchlist {
+  .quote-alert {
+    margin-bottom: 16px;
+  }
+
   .rules-section {
     margin-bottom: 20px;
   }
@@ -629,6 +815,12 @@ onMounted(async () => {
       font-size: 12px;
       color: var(--qt-text-muted);
     }
+
+    .stock-actions {
+      margin-top: 8px;
+      display: flex;
+      justify-content: flex-end;
+    }
   }
 
   .conditions-editor {
@@ -654,9 +846,49 @@ onMounted(async () => {
     }
   }
 
+  .symbol-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--qt-text-muted);
+    line-height: 1.5;
+  }
+
   .notes {
     color: var(--qt-text-muted);
     font-size: 13px;
+  }
+
+  .company-profile-block {
+    margin-top: 16px;
+  }
+
+  .company-profile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+
+    h4 {
+      margin: 0;
+      font-size: 15px;
+      color: var(--qt-text-primary);
+    }
+  }
+
+  .company-overview {
+    margin-bottom: 12px;
+    color: var(--qt-text-secondary);
+    line-height: 1.7;
+    white-space: pre-wrap;
+  }
+
+  .company-extra-fields {
+    margin-bottom: 10px;
+  }
+
+  .company-source {
+    color: var(--qt-text-muted);
+    font-size: 12px;
   }
 }
 

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Newtonsoft.Json;
 using QuantTrading.Api.Data;
 using QuantTrading.Api.Models;
 using QuantTrading.Api.Services.AI;
@@ -39,6 +40,11 @@ public class ConfigController : ControllerBase
     {
         var configs = await LoadConfigMapAsync();
         var proxySnapshot = BuildProxySnapshot(configs);
+        var openAiProviders = GetOpenAiProviders(configs, maskApiKeys: true);
+        var activeOpenAiProviderId = GetActiveOpenAiProviderId(configs, openAiProviders);
+        var activeOpenAiProvider = openAiProviders
+            .FirstOrDefault(item => item.Id == activeOpenAiProviderId)
+            ?? openAiProviders.First();
 
         var response = new SystemConfigResponse
         {
@@ -82,9 +88,11 @@ public class ConfigController : ControllerBase
             OpenAi = new OpenAiConfigResponse
             {
                 Enabled = GetBool(configs, "openai", "Enabled", ParseBool(_configuration["OpenAI:Enabled"])),
-                ApiKey = GetSecret(configs, "openai", "ApiKey", _configuration["OpenAI:ApiKey"]),
-                BaseUrl = GetString(configs, "openai", "BaseUrl", _configuration["OpenAI:BaseUrl"] ?? "https://api.openai.com/v1"),
-                Model = GetString(configs, "openai", "Model", _configuration["OpenAI:Model"] ?? "gpt-4o-mini")
+                ApiKey = activeOpenAiProvider.ApiKey,
+                BaseUrl = activeOpenAiProvider.BaseUrl,
+                Model = activeOpenAiProvider.Model,
+                ActiveProviderId = activeOpenAiProviderId,
+                Providers = openAiProviders
             }
         };
 
@@ -243,10 +251,48 @@ public class ConfigController : ControllerBase
 
     private async Task UpdateOpenAiAsync(OpenAiUpdateRequest config)
     {
+        var existingConfigs = await _dbContext.SystemConfigs
+            .Where(c => c.Category == "openai")
+            .ToListAsync();
+
+        var existingMap = existingConfigs.ToDictionary(c => c.Key, c => c.Value, StringComparer.OrdinalIgnoreCase);
+        var existingProviders = ParseOpenAiProviders(existingMap.GetValueOrDefault("Providers"), maskApiKeys: false);
+        if (existingProviders.Count == 0)
+        {
+            existingProviders.Add(new OpenAiProviderItem
+            {
+                Id = "default",
+                Name = "默认模型源",
+                ApiKey = existingMap.GetValueOrDefault("ApiKey") ?? string.Empty,
+                BaseUrl = existingMap.GetValueOrDefault("BaseUrl") ?? "https://api.openai.com/v1",
+                Model = existingMap.GetValueOrDefault("Model") ?? "gpt-4o-mini"
+            });
+        }
+
+        var providers = NormalizeOpenAiProviders(config, existingProviders);
+        if (providers.Count == 0)
+        {
+            providers.Add(new OpenAiProviderItem
+            {
+                Id = "default",
+                Name = "默认模型源",
+                ApiKey = string.Empty,
+                BaseUrl = "https://api.openai.com/v1",
+                Model = "gpt-4o-mini"
+            });
+        }
+
+        var preferredProviderId = string.IsNullOrWhiteSpace(config.ActiveProviderId)
+            ? string.Empty
+            : config.ActiveProviderId.Trim();
+        var activeProvider = providers.FirstOrDefault(p => p.Id == preferredProviderId) ?? providers[0];
+
         await UpsertConfigAsync("openai", "Enabled", FormatBool(config.Enabled), "Enable OpenAI");
-        await UpsertConfigAsync("openai", "ApiKey", config.ApiKey, "OpenAI API Key");
-        await UpsertConfigAsync("openai", "BaseUrl", config.BaseUrl, "OpenAI Base URL");
-        await UpsertConfigAsync("openai", "Model", config.Model, "OpenAI Model");
+        await UpsertConfigAsync("openai", "ApiKey", activeProvider.ApiKey, "OpenAI API Key");
+        await UpsertConfigAsync("openai", "BaseUrl", activeProvider.BaseUrl, "OpenAI Base URL");
+        await UpsertConfigAsync("openai", "Model", activeProvider.Model, "OpenAI Model");
+        await UpsertConfigAsync("openai", "ActiveProviderId", activeProvider.Id, "OpenAI Active Provider Id");
+        await UpsertConfigAsync("openai", "Providers", JsonConvert.SerializeObject(providers), "OpenAI Providers");
     }
 
     private async Task UpsertConfigAsync(string category, string key, string? value, string description)
@@ -438,6 +484,154 @@ public class ConfigController : ControllerBase
             : fallback;
     }
 
+    private List<OpenAiProviderItem> GetOpenAiProviders(
+        IReadOnlyDictionary<string, Dictionary<string, SystemConfig>> configs,
+        bool maskApiKeys)
+    {
+        var providers = ParseOpenAiProviders(GetString(configs, "openai", "Providers"), maskApiKeys);
+        if (providers.Count > 0)
+        {
+            return providers;
+        }
+
+        var legacyApiKey = maskApiKeys
+            ? GetSecret(configs, "openai", "ApiKey", _configuration["OpenAI:ApiKey"])
+            : GetString(configs, "openai", "ApiKey", _configuration["OpenAI:ApiKey"]);
+
+        return new List<OpenAiProviderItem>
+        {
+            new()
+            {
+                Id = "default",
+                Name = "默认模型源",
+                ApiKey = legacyApiKey,
+                BaseUrl = GetString(configs, "openai", "BaseUrl", _configuration["OpenAI:BaseUrl"] ?? "https://api.openai.com/v1"),
+                Model = GetString(configs, "openai", "Model", _configuration["OpenAI:Model"] ?? "gpt-4o-mini")
+            }
+        };
+    }
+
+    private static string GetActiveOpenAiProviderId(
+        IReadOnlyDictionary<string, Dictionary<string, SystemConfig>> configs,
+        IReadOnlyList<OpenAiProviderItem> providers)
+    {
+        var preferred = GetString(configs, "openai", "ActiveProviderId");
+        if (providers.Any(item => item.Id == preferred))
+        {
+            return preferred;
+        }
+
+        return providers.FirstOrDefault()?.Id ?? "default";
+    }
+
+    private static List<OpenAiProviderItem> ParseOpenAiProviders(string? raw, bool maskApiKeys)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return new List<OpenAiProviderItem>();
+        }
+
+        try
+        {
+            var rows = JsonConvert.DeserializeObject<List<OpenAiProviderItem>>(raw) ?? new List<OpenAiProviderItem>();
+            var normalized = new List<OpenAiProviderItem>();
+            foreach (var row in rows)
+            {
+                var id = (row.Id ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    continue;
+                }
+
+                var apiKey = (row.ApiKey ?? string.Empty).Trim();
+                normalized.Add(new OpenAiProviderItem
+                {
+                    Id = id,
+                    Name = string.IsNullOrWhiteSpace(row.Name) ? id : row.Name.Trim(),
+                    ApiKey = maskApiKeys && !string.IsNullOrWhiteSpace(apiKey) ? MaskedValue : apiKey,
+                    BaseUrl = string.IsNullOrWhiteSpace(row.BaseUrl) ? "https://api.openai.com/v1" : row.BaseUrl.Trim(),
+                    Model = string.IsNullOrWhiteSpace(row.Model) ? "gpt-4o-mini" : row.Model.Trim()
+                });
+            }
+
+            return normalized;
+        }
+        catch
+        {
+            return new List<OpenAiProviderItem>();
+        }
+    }
+
+    private static List<OpenAiProviderItem> NormalizeOpenAiProviders(
+        OpenAiUpdateRequest request,
+        IReadOnlyList<OpenAiProviderItem> existingProviders)
+    {
+        var existingMap = existingProviders
+            .Where(item => !string.IsNullOrWhiteSpace(item.Id))
+            .ToDictionary(item => item.Id, item => item, StringComparer.OrdinalIgnoreCase);
+
+        List<OpenAiProviderItem> rawProviders;
+        if (request.Providers is { Count: > 0 })
+        {
+            rawProviders = request.Providers
+                .Select(item => new OpenAiProviderItem
+                {
+                    Id = item.Id,
+                    Name = item.Name,
+                    ApiKey = item.ApiKey,
+                    BaseUrl = item.BaseUrl,
+                    Model = item.Model
+                })
+                .ToList();
+        }
+        else
+        {
+            rawProviders = new List<OpenAiProviderItem>
+            {
+                new()
+                {
+                    Id = "default",
+                    Name = "默认模型源",
+                    ApiKey = request.ApiKey,
+                    BaseUrl = request.BaseUrl,
+                    Model = request.Model
+                }
+            };
+        }
+
+        var normalized = new List<OpenAiProviderItem>();
+        var seq = 1;
+        foreach (var row in rawProviders)
+        {
+            var id = string.IsNullOrWhiteSpace(row.Id) ? $"provider-{seq++}" : row.Id.Trim();
+            if (normalized.Any(item => item.Id == id))
+            {
+                continue;
+            }
+
+            existingMap.TryGetValue(id, out var existing);
+            var incomingApiKey = (row.ApiKey ?? string.Empty).Trim();
+            var mergedApiKey = incomingApiKey == MaskedValue
+                ? (existing?.ApiKey ?? string.Empty)
+                : incomingApiKey;
+
+            normalized.Add(new OpenAiProviderItem
+            {
+                Id = id,
+                Name = string.IsNullOrWhiteSpace(row.Name) ? $"模型源 {normalized.Count + 1}" : row.Name.Trim(),
+                ApiKey = mergedApiKey,
+                BaseUrl = string.IsNullOrWhiteSpace(row.BaseUrl)
+                    ? (string.IsNullOrWhiteSpace(existing?.BaseUrl) ? "https://api.openai.com/v1" : existing.BaseUrl)
+                    : row.BaseUrl.Trim(),
+                Model = string.IsNullOrWhiteSpace(row.Model)
+                    ? (string.IsNullOrWhiteSpace(existing?.Model) ? "gpt-4o-mini" : existing.Model)
+                    : row.Model.Trim()
+            });
+        }
+
+        return normalized;
+    }
+
     private static bool ShouldMaskValue(string category, string key, bool isEncrypted)
     {
         if (isEncrypted)
@@ -453,6 +647,7 @@ public class ConfigController : ControllerBase
             ("email", "smtppassword") => true,
             ("feishu", "secret") => true,
             ("openai", "apikey") => true,
+            ("openai", "providers") => true,
             _ => false
         };
     }
@@ -487,6 +682,8 @@ public class ConfigController : ControllerBase
             ("openai", "apikey") => "OpenAI API Key",
             ("openai", "baseurl") => "OpenAI Base URL",
             ("openai", "model") => "OpenAI Model",
+            ("openai", "activeproviderid") => "OpenAI Active Provider Id",
+            ("openai", "providers") => "OpenAI Providers",
             _ => string.Empty
         };
     }
@@ -581,6 +778,8 @@ public class ConfigController : ControllerBase
         public string? ApiKey { get; set; }
         public string? BaseUrl { get; set; }
         public string? Model { get; set; }
+        public string? ActiveProviderId { get; set; }
+        public List<OpenAiProviderItem>? Providers { get; set; }
     }
 
     public sealed class SystemConfigResponse
@@ -641,6 +840,17 @@ public class ConfigController : ControllerBase
         public string ApiKey { get; init; } = string.Empty;
         public string BaseUrl { get; init; } = string.Empty;
         public string Model { get; init; } = string.Empty;
+        public string ActiveProviderId { get; init; } = string.Empty;
+        public List<OpenAiProviderItem> Providers { get; init; } = new();
+    }
+
+    public sealed class OpenAiProviderItem
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string ApiKey { get; set; } = string.Empty;
+        public string BaseUrl { get; set; } = string.Empty;
+        public string Model { get; set; } = string.Empty;
     }
 
     private sealed class ProxySnapshot

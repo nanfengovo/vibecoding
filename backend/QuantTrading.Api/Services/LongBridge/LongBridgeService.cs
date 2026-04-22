@@ -15,7 +15,7 @@ namespace QuantTrading.Api.Services.LongBridge;
 
 public class LongBridgeService : ILongBridgeService
 {
-    private static readonly string[] DefaultSearchMarkets = ["US", "HK", "CN", "SG"];
+    private static readonly string[] DefaultSearchMarkets = ["US"];
     private static readonly TimeSpan SecurityListCacheDuration = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan StockSnapshotCacheDuration = TimeSpan.FromMinutes(5);
     private static readonly Regex StooqKlineRowRegex = new(
@@ -192,6 +192,7 @@ public class LongBridgeService : ILongBridgeService
             BaseAddress = new Uri(config.BaseUrl)
         };
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        client.DefaultRequestHeaders.AcceptLanguage.ParseAdd("zh-CN,zh;q=0.9,en;q=0.8");
         return client;
     }
 
@@ -502,8 +503,11 @@ public class LongBridgeService : ILongBridgeService
             return result;
         }
 
-        var symbolsParam = string.Join(",", normalizedSymbols);
-        var response = await SendRequestAsync($"/v1/quote/realtime?symbol={symbolsParam}", HttpMethod.Get);
+        // LongBridge quote/realtime expects repeated symbol parameters, e.g.:
+        // /v1/quote/realtime?symbol=AAPL.US&symbol=MSFT.US
+        var symbolsQuery = string.Join("&", normalizedSymbols
+            .Select(symbol => $"symbol={Uri.EscapeDataString(symbol)}"));
+        var response = await SendRequestAsync($"/v1/quote/realtime?{symbolsQuery}", HttpMethod.Get);
 
         if (string.IsNullOrEmpty(response))
         {
@@ -515,30 +519,76 @@ public class LongBridgeService : ILongBridgeService
             if (!string.IsNullOrWhiteSpace(response))
             {
                 var json = JObject.Parse(response);
-                var data = json["data"] as JArray;
+                var code = json["code"]?.Value<int?>();
+                if (code.HasValue && code.Value != 0)
+                {
+                    var message = json["message"]?.ToString() ?? json["msg"]?.ToString() ?? "unknown";
+                    _logger.LogWarning("LongBridge quote business error: code={Code}, message={Message}", code.Value, message);
+                }
+
+                var data = json["data"]?["secu_quote"] as JArray
+                    ?? json["data"]?["quote"] as JArray
+                    ?? json["data"]?["list"] as JArray
+                    ?? json["data"] as JArray
+                    ?? json["secu_quote"] as JArray
+                    ?? json["quote"] as JArray
+                    ?? json["list"] as JArray;
 
                 if (data != null)
                 {
                     foreach (var item in data)
                     {
+                        var parsedSymbol = NormalizeSymbol(item["symbol"]?.ToString() ?? string.Empty);
+                        if (string.IsNullOrWhiteSpace(parsedSymbol))
+                        {
+                            continue;
+                        }
+
+                        var price = ParseDecimalToken(item["last_done"]);
+                        if (price <= 0)
+                        {
+                            price = ParseDecimalToken(item["last"]);
+                        }
+
+                        var previousClose = ParseDecimalToken(item["prev_close"]);
+                        if (previousClose <= 0)
+                        {
+                            previousClose = ParseDecimalToken(item["pre_close"]);
+                        }
+                        if (previousClose <= 0)
+                        {
+                            previousClose = ParseDecimalToken(item["last_close"]);
+                        }
+
+                        var change = ParseDecimalToken(item["change_value"]);
+                        if (change == 0)
+                        {
+                            change = ParseDecimalToken(item["change"]);
+                        }
+                        if (change == 0 && price > 0 && previousClose > 0)
+                        {
+                            change = price - previousClose;
+                        }
+
+                        var changePercent = ParseDecimalToken(item["change_rate"]);
+                        if (changePercent == 0 && price > 0 && previousClose > 0)
+                        {
+                            changePercent = (price - previousClose) / previousClose * 100;
+                        }
+
                         result.Add(new StockQuote
                         {
-                            Symbol = NormalizeSymbol(item["symbol"]?.ToString() ?? ""),
-                            Price = item["last_done"]?.Value<decimal>() ?? 0,
-                            PreviousClose = item["prev_close"]?.Value<decimal>()
-                                ?? item["pre_close"]?.Value<decimal>()
-                                ?? item["last_close"]?.Value<decimal>()
-                                ?? 0,
-                            Open = item["open"]?.Value<decimal>() ?? 0,
-                            High = item["high"]?.Value<decimal>() ?? 0,
-                            Low = item["low"]?.Value<decimal>() ?? 0,
-                            Volume = item["volume"]?.Value<long>() ?? 0,
-                            Turnover = item["turnover"]?.Value<decimal>() ?? 0,
-                            Change = item["change_value"]?.Value<decimal>()
-                                ?? item["change"]?.Value<decimal>()
-                                ?? 0,
-                            ChangePercent = item["change_rate"]?.Value<decimal>() ?? 0,
-                            Timestamp = DateTime.UtcNow
+                            Symbol = parsedSymbol,
+                            Price = price,
+                            PreviousClose = previousClose,
+                            Open = ParseDecimalToken(item["open"]),
+                            High = ParseDecimalToken(item["high"]),
+                            Low = ParseDecimalToken(item["low"]),
+                            Volume = ParseLongToken(item["volume"]),
+                            Turnover = ParseDecimalToken(item["turnover"]),
+                            Change = change,
+                            ChangePercent = changePercent,
+                            Timestamp = ParseQuoteTimestamp(item["timestamp"])
                         });
                     }
                 }
@@ -550,12 +600,12 @@ public class LongBridgeService : ILongBridgeService
         }
 
         var missingSymbols = normalizedSymbols
-            .Where(s => !result.Any(q => q.Symbol.Equals(s, StringComparison.OrdinalIgnoreCase)))
+            .Where(s => !result.Any(q => SymbolEquals(q.Symbol, s)))
             .ToList();
 
         foreach (var missing in missingSymbols)
         {
-            var fallbackQuote = await GetQuoteFromStooqAsync(missing);
+            var fallbackQuote = await GetQuoteFromPublicFallbacksAsync(missing);
             if (fallbackQuote != null)
             {
                 result.Add(fallbackQuote);
@@ -667,16 +717,25 @@ public class LongBridgeService : ILongBridgeService
         var stockMeta = candidates.FirstOrDefault(s => s.Symbol.Equals(normalizedSymbol, StringComparison.OrdinalIgnoreCase))
             ?? candidates.FirstOrDefault(s => s.Symbol.StartsWith($"{normalizedSymbol}.", StringComparison.OrdinalIgnoreCase));
 
-        stockMeta ??= new Stock
+        if (stockMeta == null)
         {
-            Symbol = normalizedSymbol,
-            Name = normalizedSymbol,
-            Market = InferMarketFromSymbol(normalizedSymbol)
-        };
+            // get_security_list 在部分账号/市场可能不完整，允许直接按代码继续走行情链路。
+            _logger.LogWarning(
+                "Stock not found in LongBridge security list, fallback to direct symbol lookup: {Symbol}",
+                normalizedSymbol);
+            stockMeta = new Stock
+            {
+                Symbol = normalizedSymbol,
+                Name = normalizedSymbol.Split('.').FirstOrDefault() ?? normalizedSymbol,
+                Market = InferMarketFromSymbol(normalizedSymbol)
+            };
+        }
 
-        var quote = await GetQuoteAsync(normalizedSymbol);
-        var dailyKlines = await GetKlineAsync(normalizedSymbol, "D", count: 260);
-        var snapshot = await GetStockSnapshotFromStooqAsync(normalizedSymbol);
+        var resolvedSymbol = NormalizeSymbol(stockMeta.Symbol);
+
+        var quote = await GetQuoteAsync(resolvedSymbol);
+        var dailyKlines = await GetKlineAsync(resolvedSymbol, "D", count: 260);
+        var snapshot = await GetStockSnapshotFromStooqAsync(resolvedSymbol);
 
         var orderedKlines = dailyKlines
             .Where(k => k.Timestamp != default)
@@ -727,11 +786,28 @@ public class LongBridgeService : ILongBridgeService
             }
         }
 
+        var hasValidMarketData = currentPrice > 0
+            || previousClose > 0
+            || open > 0
+            || high > 0
+            || low > 0
+            || volume > 0
+            || high52Week > 0
+            || low52Week > 0
+            || avgVolume > 0
+            || snapshot.MarketCap > 0;
+
+        if (!hasValidMarketData)
+        {
+            _logger.LogWarning("No valid market data found for symbol {Symbol}", resolvedSymbol);
+            return null;
+        }
+
         return new Stock
         {
-            Symbol = stockMeta.Symbol,
-            Name = string.IsNullOrWhiteSpace(stockMeta.Name) ? stockMeta.Symbol : stockMeta.Name,
-            Market = string.IsNullOrWhiteSpace(stockMeta.Market) ? InferMarketFromSymbol(stockMeta.Symbol) : stockMeta.Market,
+            Symbol = resolvedSymbol,
+            Name = string.IsNullOrWhiteSpace(stockMeta.Name) ? resolvedSymbol : stockMeta.Name,
+            Market = string.IsNullOrWhiteSpace(stockMeta.Market) ? InferMarketFromSymbol(resolvedSymbol) : stockMeta.Market,
             CurrentPrice = currentPrice,
             PreviousClose = previousClose,
             Open = open,
@@ -781,19 +857,6 @@ public class LongBridgeService : ILongBridgeService
         if (results.Count > 0)
         {
             return results;
-        }
-
-        if (LooksLikeSymbol(normalizedKeyword))
-        {
-            return new List<Stock>
-            {
-                new()
-                {
-                    Symbol = NormalizeSymbol(normalizedKeyword),
-                    Name = normalizedKeyword,
-                    Market = InferMarketFromSymbol(normalizedKeyword)
-                }
-            };
         }
 
         return new List<Stock>();
@@ -866,8 +929,10 @@ public class LongBridgeService : ILongBridgeService
                     continue;
                 }
 
-                var name = item["name_cn"]?.ToString()
+                var name = item["name"]?.ToString()
+                    ?? item["name_cn"]?.ToString()
                     ?? item["name_en"]?.ToString()
+                    ?? item["name_zh"]?.ToString()
                     ?? item["name_hk"]?.ToString()
                     ?? symbol;
 
@@ -890,23 +955,54 @@ public class LongBridgeService : ILongBridgeService
     private static IEnumerable<string> GetCandidateMarkets(string keyword)
     {
         var normalized = (keyword ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return DefaultSearchMarkets;
+        }
+
+        if (normalized.StartsWith("SH", StringComparison.OrdinalIgnoreCase) && normalized.Length == 8 && normalized.Skip(2).All(char.IsDigit))
+        {
+            return ["SH"];
+        }
+
+        if (normalized.StartsWith("SZ", StringComparison.OrdinalIgnoreCase) && normalized.Length == 8 && normalized.Skip(2).All(char.IsDigit))
+        {
+            return ["SZ"];
+        }
+
         if (normalized.Contains('.'))
         {
             var suffix = normalized.Split('.').LastOrDefault() ?? string.Empty;
-            if (DefaultSearchMarkets.Contains(suffix, StringComparer.OrdinalIgnoreCase))
+            if (suffix.Equals("US", StringComparison.OrdinalIgnoreCase) ||
+                suffix.Equals("HK", StringComparison.OrdinalIgnoreCase) ||
+                suffix.Equals("SG", StringComparison.OrdinalIgnoreCase) ||
+                suffix.Equals("SH", StringComparison.OrdinalIgnoreCase) ||
+                suffix.Equals("SZ", StringComparison.OrdinalIgnoreCase))
             {
                 return [suffix];
             }
+
+            if (suffix.Equals("CN", StringComparison.OrdinalIgnoreCase))
+            {
+                return ["SH", "SZ"];
+            }
+
+            return [];
         }
 
-        if (normalized.All(char.IsDigit) && normalized.Length == 5)
+        if (normalized.All(char.IsDigit))
         {
-            return ["HK"];
-        }
+            if (normalized.Length == 5)
+            {
+                return ["HK"];
+            }
 
-        if (normalized.All(char.IsLetter))
-        {
-            return ["US"];
+            if (normalized.Length == 6)
+            {
+                return normalized.StartsWith("6", StringComparison.Ordinal) || normalized.StartsWith("9", StringComparison.Ordinal)
+                    ? ["SH"]
+                    : ["SZ"];
+            }
         }
 
         return DefaultSearchMarkets;
@@ -967,11 +1063,6 @@ public class LongBridgeService : ILongBridgeService
         return 7;
     }
 
-    private static bool LooksLikeSymbol(string keyword)
-    {
-        return keyword.All(c => char.IsLetterOrDigit(c) || c == '.');
-    }
-
     private static string NormalizeSymbol(string symbol)
     {
         var normalized = (symbol ?? string.Empty).Trim().ToUpperInvariant();
@@ -980,9 +1071,25 @@ public class LongBridgeService : ILongBridgeService
             return string.Empty;
         }
 
+        var cnPrefixMatch = Regex.Match(normalized, @"^(SH|SZ)(\d{6})$");
+        if (cnPrefixMatch.Success)
+        {
+            return $"{cnPrefixMatch.Groups[2].Value}.{cnPrefixMatch.Groups[1].Value}";
+        }
+
         if (normalized.Contains('.'))
         {
             return normalized;
+        }
+
+        if (normalized.All(char.IsDigit) && normalized.Length == 6)
+        {
+            var market = normalized.StartsWith("6", StringComparison.Ordinal)
+                || normalized.StartsWith("9", StringComparison.Ordinal)
+                || normalized.StartsWith("5", StringComparison.Ordinal)
+                ? "SH"
+                : "SZ";
+            return $"{normalized}.{market}";
         }
 
         if (normalized.All(char.IsDigit) && normalized.Length == 5)
@@ -991,6 +1098,86 @@ public class LongBridgeService : ILongBridgeService
         }
 
         return $"{normalized}.US";
+    }
+
+    private static bool SymbolEquals(string? left, string? right)
+    {
+        var normalizedLeft = NormalizeSymbol(left ?? string.Empty);
+        var normalizedRight = NormalizeSymbol(right ?? string.Empty);
+        if (normalizedLeft.Equals(normalizedRight, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var leftBase = normalizedLeft.Split('.').FirstOrDefault() ?? normalizedLeft;
+        var rightBase = normalizedRight.Split('.').FirstOrDefault() ?? normalizedRight;
+        return leftBase.Equals(rightBase, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<StockQuote?> GetQuoteFromPublicFallbacksAsync(string symbol)
+    {
+        var stooqQuote = await GetQuoteFromStooqAsync(symbol);
+        if (stooqQuote?.Price > 0)
+        {
+            return stooqQuote;
+        }
+
+        var yahooKlines = await GetKlineFromYahooAsync(symbol, "D", 5);
+        var yahooQuote = BuildQuoteFromKlines(symbol, yahooKlines);
+        if (yahooQuote?.Price > 0)
+        {
+            return yahooQuote;
+        }
+
+        var nasdaqKlines = await GetKlineFromNasdaqAsync(symbol, "D", 5);
+        var nasdaqQuote = BuildQuoteFromKlines(symbol, nasdaqKlines);
+        if (nasdaqQuote?.Price > 0)
+        {
+            return nasdaqQuote;
+        }
+
+        return stooqQuote ?? yahooQuote ?? nasdaqQuote;
+    }
+
+    private static StockQuote? BuildQuoteFromKlines(string symbol, IReadOnlyCollection<StockKline>? klines)
+    {
+        var ordered = (klines ?? Array.Empty<StockKline>())
+            .Where(k => k.Close > 0)
+            .OrderBy(k => k.Timestamp)
+            .ToList();
+
+        if (!ordered.Any())
+        {
+            return null;
+        }
+
+        var latest = ordered[^1];
+        var previous = ordered.Count >= 2 ? ordered[^2] : null;
+        var previousClose = previous?.Close ?? latest.Open;
+        if (previousClose <= 0)
+        {
+            previousClose = latest.Close;
+        }
+
+        var change = latest.Close - previousClose;
+        var changePercent = previousClose > 0
+            ? change / previousClose * 100
+            : 0;
+
+        return new StockQuote
+        {
+            Symbol = NormalizeSymbol(symbol),
+            Price = latest.Close,
+            Open = latest.Open > 0 ? latest.Open : latest.Close,
+            High = latest.High > 0 ? latest.High : latest.Close,
+            Low = latest.Low > 0 ? latest.Low : latest.Close,
+            Volume = latest.Volume,
+            Turnover = latest.Turnover,
+            PreviousClose = previousClose,
+            Change = change,
+            ChangePercent = changePercent,
+            Timestamp = latest.Timestamp == default ? DateTime.UtcNow : latest.Timestamp
+        };
     }
 
     private static string InferMarketFromSymbol(string symbol, string fallback = "US")
@@ -1006,6 +1193,8 @@ public class LongBridgeService : ILongBridgeService
         {
             "HK" => "HK",
             "CN" => "CN",
+            "SH" => "SH",
+            "SZ" => "SZ",
             "SG" => "SG",
             "US" => "US",
             _ => fallback.ToUpperInvariant()
@@ -1550,6 +1739,8 @@ public class LongBridgeService : ILongBridgeService
             "US" => ticker,
             "HK" => $"{ticker}.HK",
             "SG" => $"{ticker}.SI",
+            "SH" => $"{ticker}.SS",
+            "SZ" => $"{ticker}.SZ",
             "CN" => ticker.StartsWith("6", StringComparison.Ordinal) ? $"{ticker}.SS" : $"{ticker}.SZ",
             _ => ticker
         };
@@ -1689,6 +1880,39 @@ public class LongBridgeService : ILongBridgeService
         }
 
         return ParseLongValue(token.ToString());
+    }
+
+    private static DateTime ParseQuoteTimestamp(JToken? token)
+    {
+        if (token == null || token.Type == JTokenType.Null)
+        {
+            return DateTime.UtcNow;
+        }
+
+        if (!long.TryParse(token.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var raw))
+        {
+            return DateTime.UtcNow;
+        }
+
+        try
+        {
+            // LongBridge realtime timestamp can be seconds or milliseconds.
+            if (raw > 1_000_000_000_000)
+            {
+                return DateTimeOffset.FromUnixTimeMilliseconds(raw).UtcDateTime;
+            }
+
+            if (raw > 0)
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(raw).UtcDateTime;
+            }
+        }
+        catch
+        {
+            return DateTime.UtcNow;
+        }
+
+        return DateTime.UtcNow;
     }
 
     private static DateTime ParseStooqDate(string? value)

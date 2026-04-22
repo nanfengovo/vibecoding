@@ -45,8 +45,8 @@
             style="margin-top: 16px"
           >
             <template #default>
-              请填写 `open.longbridge.com` 的 User Center → `application credential` 中生成的 Legacy Access Token，
-              不要填写 OAuth token、网页登录态 token，或带额外前缀的 token。
+              Legacy 模式需要同时填写 `App Key`、`App Secret`、`Access Token` 三项（均来自 User Center → application credential）。
+              若使用 OAuth token，请在 Access Token 前加 `Bearer ` 前缀，并将 App Key/App Secret 留空。
             </template>
           </el-alert>
         </div>
@@ -243,31 +243,68 @@
       <!-- OpenAI配置 -->
       <el-tab-pane label="AI分析" name="openai">
         <div class="card">
-          <h3>OpenAI 配置</h3>
+          <h3>AI 模型配置</h3>
           <el-form :model="config.openAi" label-width="120px">
             <el-form-item label="启用AI分析">
               <el-switch v-model="config.openAi.enabled" />
             </el-form-item>
             <template v-if="config.openAi.enabled">
-              <el-form-item label="API Key">
-                <el-input
-                  v-model="config.openAi.apiKey"
-                  type="password"
-                  show-password
-                  placeholder="sk-..."
-                />
+              <el-form-item label="默认模型源">
+                <div class="ai-provider-toolbar">
+                  <el-select v-model="config.openAi.activeProviderId" placeholder="选择默认模型源" style="width: 260px">
+                    <el-option
+                      v-for="provider in config.openAi.providers"
+                      :key="provider.id"
+                      :label="provider.name"
+                      :value="provider.id"
+                    />
+                  </el-select>
+                  <el-button @click="addAiProvider">新增模型源</el-button>
+                </div>
               </el-form-item>
-              <el-form-item label="Base URL">
-                <el-input
-                  v-model="config.openAi.baseUrl"
-                  placeholder="https://api.openai.com/v1"
-                />
-              </el-form-item>
-              <el-form-item label="模型">
-                <el-input
-                  v-model="config.openAi.model"
-                  placeholder="gpt-4o-mini"
-                />
+              <el-form-item label="模型源列表">
+                <div class="ai-provider-list">
+                  <div
+                    v-for="(provider, index) in config.openAi.providers"
+                    :key="provider.id"
+                    class="ai-provider-item"
+                  >
+                    <div class="ai-provider-item-header">
+                      <span>模型源 {{ index + 1 }}</span>
+                      <el-button
+                        link
+                        type="danger"
+                        :disabled="config.openAi.providers.length <= 1"
+                        @click="removeAiProvider(provider.id)"
+                      >
+                        删除
+                      </el-button>
+                    </div>
+                    <el-input v-model="provider.name" placeholder="显示名称，例如 OpenAI 主账号" class="provider-input" />
+                    <el-input
+                      v-model="provider.apiKey"
+                      type="password"
+                      show-password
+                      placeholder="API Key"
+                      class="provider-input"
+                    />
+                    <el-input
+                      v-model="provider.baseUrl"
+                      placeholder="Base URL，例如 https://api.openai.com/v1"
+                      class="provider-input"
+                    />
+                    <el-input
+                      v-model="provider.model"
+                      type="textarea"
+                      :rows="2"
+                      placeholder="模型列表，支持逗号/分号/换行分隔（按顺序回退）"
+                      class="provider-input"
+                    />
+                  </div>
+                </div>
+                <div class="hint-text">
+                  支持同一家或不同厂商：每个模型源可配置独立 `API Key + Base URL + 模型列表`，分析时可选择使用。
+                </div>
               </el-form-item>
             </template>
             <el-form-item>
@@ -291,7 +328,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { configApi } from '@/api'
-import type { SystemConfig } from '@/types'
+import type { AiProviderConfig, SystemConfig } from '@/types'
 
 const activeTab = ref('longbridge')
 const testing = ref({
@@ -301,6 +338,41 @@ const testing = ref({
   wechat: false,
   openai: false
 })
+
+function createAiProvider(seed?: Partial<AiProviderConfig>, index = 0): AiProviderConfig {
+  const id = String(seed?.id || `provider-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`).trim()
+  return {
+    id,
+    name: String(seed?.name || `模型源 ${index + 1}`).trim() || `模型源 ${index + 1}`,
+    apiKey: String(seed?.apiKey || '').trim(),
+    baseUrl: String(seed?.baseUrl || '').trim() || 'https://api.openai.com/v1',
+    model: String(seed?.model || '').trim() || 'gpt-5-mini'
+  }
+}
+
+function normalizeOpenAiConfig(openAi: SystemConfig['openAi']): SystemConfig['openAi'] {
+  const providers = Array.isArray(openAi?.providers) && openAi.providers.length > 0
+    ? openAi.providers.map((item, index) => createAiProvider(item, index))
+    : [createAiProvider({
+      id: 'default',
+      name: '默认模型源',
+      apiKey: openAi?.apiKey,
+      baseUrl: openAi?.baseUrl,
+      model: openAi?.model
+    })]
+
+  const preferredId = String(openAi?.activeProviderId || '').trim()
+  const active = providers.find((item) => item.id === preferredId) || providers[0]
+
+  return {
+    ...openAi,
+    providers,
+    activeProviderId: active?.id || '',
+    apiKey: active?.apiKey || '',
+    baseUrl: active?.baseUrl || 'https://api.openai.com/v1',
+    model: active?.model || 'gpt-5-mini'
+  }
+}
 
 const config = ref<SystemConfig>({
   longBridge: {
@@ -336,7 +408,17 @@ const config = ref<SystemConfig>({
     enabled: false,
     apiKey: '',
     baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-4o-mini'
+    model: 'gpt-5-mini',
+    providers: [
+      {
+        id: 'default',
+        name: '默认模型源',
+        apiKey: '',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-5-mini'
+      }
+    ],
+    activeProviderId: 'default'
   }
 })
 
@@ -357,7 +439,14 @@ function getApiErrorMessage(error: unknown, fallback: string) {
 async function loadConfig() {
   try {
     const data = await configApi.get()
-    config.value = { ...config.value, ...data }
+    config.value = {
+      ...config.value,
+      ...data,
+      openAi: normalizeOpenAiConfig({
+        ...config.value.openAi,
+        ...(data?.openAi || {})
+      } as SystemConfig['openAi'])
+    }
   } catch (error) {
     console.error('Failed to load config:', error)
   }
@@ -457,8 +546,36 @@ async function testWechat() {
   }
 }
 
+function syncOpenAiLegacyFields() {
+  config.value.openAi = normalizeOpenAiConfig(config.value.openAi)
+}
+
+function addAiProvider() {
+  const next = createAiProvider(undefined, config.value.openAi.providers.length)
+  config.value.openAi.providers.push(next)
+  if (!config.value.openAi.activeProviderId) {
+    config.value.openAi.activeProviderId = next.id
+  }
+  syncOpenAiLegacyFields()
+}
+
+function removeAiProvider(providerId: string) {
+  const providers = config.value.openAi.providers
+  if (providers.length <= 1) {
+    return
+  }
+
+  const nextProviders = providers.filter((item) => item.id !== providerId)
+  config.value.openAi.providers = nextProviders
+  if (!nextProviders.some((item) => item.id === config.value.openAi.activeProviderId)) {
+    config.value.openAi.activeProviderId = nextProviders[0]?.id || ''
+  }
+  syncOpenAiLegacyFields()
+}
+
 async function saveOpenAi() {
   try {
+    syncOpenAiLegacyFields()
     await configApi.update({ openAi: config.value.openAi })
     ElMessage.success('OpenAI 配置已保存')
   } catch {
@@ -469,9 +586,10 @@ async function saveOpenAi() {
 async function testOpenAi() {
   testing.value.openai = true
   try {
+    syncOpenAiLegacyFields()
     await configApi.update({ openAi: config.value.openAi })
-    await configApi.testOpenAi()
-    ElMessage.success('OpenAI 连接成功')
+    const result: any = await configApi.testOpenAi()
+    ElMessage.success(result?.message || 'OpenAI 连接成功')
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, '连接失败，请检查配置'))
   } finally {
@@ -504,6 +622,47 @@ onMounted(() => {
       margin: 0 0 20px;
       color: var(--qt-text-primary);
     }
+  }
+
+  .hint-text {
+    margin-top: 8px;
+    color: var(--qt-text-muted);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .ai-provider-toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .ai-provider-list {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .ai-provider-item {
+    border: 1px solid var(--qt-border);
+    border-radius: 8px;
+    padding: 12px;
+    background: color-mix(in srgb, var(--qt-card-bg) 92%, #64748b 8%);
+  }
+
+  .ai-provider-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: var(--qt-text-primary);
+  }
+
+  .provider-input + .provider-input {
+    margin-top: 8px;
   }
 }
 </style>

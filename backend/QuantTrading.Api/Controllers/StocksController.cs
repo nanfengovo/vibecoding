@@ -48,6 +48,34 @@ public class StocksController : ControllerBase
         return Ok(quote);
     }
 
+    [HttpGet("{symbol}/profile")]
+    public async Task<ActionResult<CompanyProfileResponse>> GetCompanyProfile(string symbol)
+    {
+        var stock = await _longBridgeService.GetStockInfoAsync(symbol);
+        if (stock == null)
+            return NotFound();
+
+        var fields = new List<CompanyProfileField>
+        {
+            new() { Key = "代码", Value = stock.Symbol },
+            new() { Key = "市场", Value = stock.Market },
+            new() { Key = "当前价", Value = stock.CurrentPrice.ToString("F2") },
+            new() { Key = "52周区间", Value = $"{stock.Low52Week:F2} - {stock.High52Week:F2}" },
+            new() { Key = "市值", Value = stock.MarketCap > 0 ? stock.MarketCap.ToString("F2") : "-" }
+        };
+
+        var profile = new CompanyProfileResponse
+        {
+            Symbol = stock.Symbol,
+            Title = stock.Name,
+            Overview = $"{stock.Name}（{stock.Symbol}）当前可通过股票详情页面查看实时行情、K线、交易与 AI 分析信息。",
+            SourceUrl = string.Empty,
+            Fields = fields
+        };
+
+        return Ok(profile);
+    }
+
     [HttpGet("{symbol}/kline")]
     public async Task<ActionResult<List<StockKline>>> GetKline(
         string symbol, 
@@ -130,4 +158,19 @@ public class AddWatchlistRequest
 public class UpdateNotesRequest
 {
     public string Notes { get; set; } = string.Empty;
+}
+
+public sealed class CompanyProfileResponse
+{
+    public string Symbol { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string Overview { get; set; } = string.Empty;
+    public string SourceUrl { get; set; } = string.Empty;
+    public List<CompanyProfileField> Fields { get; set; } = new();
+}
+
+public sealed class CompanyProfileField
+{
+    public string Key { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
 }

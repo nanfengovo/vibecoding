@@ -15,6 +15,7 @@ export const useAppStore = defineStore('app', () => {
   const watchlist = ref<WatchlistItem[]>([])
   const config = ref<SystemConfig | null>(null)
   const notifications = ref<any[]>([])
+  const quoteError = ref('')
   const loading = ref({
     strategies: false,
     watchlist: false,
@@ -64,17 +65,35 @@ export const useAppStore = defineStore('app', () => {
 
   async function fetchWatchlist() {
     loading.value.watchlist = true
+    quoteError.value = ''
     try {
       watchlist.value = await monitorApi.getWatchlist()
       // 订阅行情
       if (watchlistSymbols.value.length > 0) {
         await signalRService.subscribeQuote(watchlistSymbols.value)
-        await Promise.allSettled(
-          watchlistSymbols.value.map(async (symbol) => {
-            const quote = await stockApi.getQuote(symbol)
-            updateQuote(quote as unknown as StockQuote)
-          })
-        )
+        try {
+          const quotes = await stockApi.getQuotes(watchlistSymbols.value)
+          if (Array.isArray(quotes) && quotes.length > 0) {
+            quotes.forEach((item) => updateQuote(item as unknown as StockQuote))
+          } else {
+            throw new Error('行情接口返回为空')
+          }
+        } catch (error) {
+          const fallbackResults = await Promise.allSettled(
+            watchlistSymbols.value.map(async (symbol) => {
+              const quote = await stockApi.getQuote(symbol)
+              updateQuote(quote as unknown as StockQuote)
+            })
+          )
+
+          const hasSuccess = fallbackResults.some((item) => item.status === 'fulfilled')
+          if (!hasSuccess) {
+            const message = (error as any)?.response?.data?.message
+              || (error as Error)?.message
+              || '行情接口暂不可用，请检查长桥配置或凭证权限'
+            quoteError.value = message
+          }
+        }
       }
     } finally {
       loading.value.watchlist = false
@@ -91,11 +110,33 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function addToWatchlist(symbol: string, notes?: string) {
-    const item = await monitorApi.addToWatchlist(symbol, notes)
-    watchlist.value.push(item)
-    await signalRService.subscribeQuote([symbol])
+    const normalized = String(symbol || '').trim().toUpperCase()
+    const item = await monitorApi.addToWatchlist(normalized, notes)
+    const itemSymbol = String(item?.symbol || normalized).trim().toUpperCase()
+
+    // Upsert by id/symbol to avoid duplicate rows or "not refreshed" perception.
+    const existingIndex = watchlist.value.findIndex((row) => {
+      const sameId = Number(row.id) > 0 && Number(row.id) === Number(item.id)
+      const sameSymbol = String(row.symbol || '').trim().toUpperCase() === itemSymbol
+      return sameId || sameSymbol
+    })
+
+    if (existingIndex >= 0) {
+      watchlist.value[existingIndex] = {
+        ...watchlist.value[existingIndex],
+        ...item,
+        symbol: itemSymbol
+      }
+    } else {
+      watchlist.value.unshift({
+        ...item,
+        symbol: itemSymbol
+      })
+    }
+
+    await signalRService.subscribeQuote([itemSymbol])
     try {
-      const quote = await stockApi.getQuote(symbol)
+      const quote = await stockApi.getQuote(itemSymbol)
       updateQuote(quote as unknown as StockQuote)
     } catch {
       // Ignore quote bootstrap failures. Realtime subscription will eventually update.
@@ -145,6 +186,13 @@ export const useAppStore = defineStore('app', () => {
     }
 
     quotes.value.set(normalized.symbol, normalized)
+
+    // Backward compatibility: some historical watchlist rows are stored as base ticker (e.g. AAPL).
+    // LongBridge quote symbol is market-qualified (e.g. AAPL.US), so keep an alias key.
+    const baseSymbol = normalized.symbol.split('.')[0] ?? normalized.symbol
+    if (baseSymbol && !baseSymbol.includes('.')) {
+      quotes.value.set(baseSymbol, normalized)
+    }
   }
 
   function addNotification(notification: any) {
@@ -211,6 +259,7 @@ export const useAppStore = defineStore('app', () => {
     watchlist,
     config,
     notifications,
+    quoteError,
     loading,
     // 计算属性
     activeStrategies,
