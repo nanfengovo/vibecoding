@@ -13,6 +13,14 @@ public interface IAiAnalysisService
     Task<AiChatResult> ChatAsync(
         AiChatInput input,
         CancellationToken cancellationToken = default);
+
+    Task<AiPromptOptimizeResult> OptimizePromptAsync(
+        AiPromptOptimizeInput input,
+        CancellationToken cancellationToken = default);
+
+    Task<AiModelsResult> GetModelsAsync(
+        AiModelsInput input,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class AiConnectionTestResult
@@ -54,4 +62,33 @@ public sealed class AiChatResult
     public string Model { get; init; } = string.Empty;
     public string Content { get; init; } = string.Empty;
     public DateTime GeneratedAt { get; init; } = DateTime.UtcNow;
+}
+
+public sealed class AiPromptOptimizeInput
+{
+    public string Question { get; init; } = string.Empty;
+    public string Symbol { get; init; } = string.Empty;
+    public string ProviderId { get; init; } = string.Empty;
+    public string Model { get; init; } = string.Empty;
+}
+
+public sealed class AiPromptOptimizeResult
+{
+    public string Model { get; init; } = string.Empty;
+    public string OptimizedPrompt { get; init; } = string.Empty;
+    public DateTime GeneratedAt { get; init; } = DateTime.UtcNow;
+}
+
+public sealed class AiModelsInput
+{
+    public string ProviderId { get; init; } = string.Empty;
+    public string BaseUrl { get; init; } = string.Empty;
+    public string ApiKey { get; init; } = string.Empty;
+}
+
+public sealed class AiModelsResult
+{
+    public string ProviderId { get; init; } = string.Empty;
+    public List<string> Models { get; init; } = new();
+    public DateTime FetchedAt { get; init; } = DateTime.UtcNow;
 }

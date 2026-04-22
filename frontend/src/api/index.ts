@@ -2,6 +2,8 @@ import axios from 'axios'
 import type { AxiosInstance, AxiosResponse } from 'axios'
 import type {
   AiChatResult,
+  AiModelsResult,
+  AiPromptOptimizeResult,
   CompanyProfile,
   Stock,
   StockQuote,
@@ -510,7 +512,38 @@ export const aiApi = {
   ) =>
     DEMO_MODE
       ? demoApi.aiApi.chat(payload)
-      : api.post<any, AiChatResult>('/ai/chat', payload)
+      : api.post<any, AiChatResult>('/ai/chat', payload),
+
+  optimizePrompt: (
+    payload: {
+      question: string
+      symbol?: string
+      providerId?: string
+      model?: string
+    }
+  ) =>
+    DEMO_MODE
+      ? Promise.resolve({
+        model: payload.model || 'demo-optimizer',
+        optimizedPrompt: payload.question,
+        generatedAt: new Date().toISOString()
+      } as AiPromptOptimizeResult)
+      : api.post<any, AiPromptOptimizeResult>('/ai/optimize-prompt', payload),
+
+  listModels: (
+    payload?: {
+      providerId?: string
+      baseUrl?: string
+      apiKey?: string
+    }
+  ) =>
+    DEMO_MODE
+      ? Promise.resolve({
+        providerId: payload?.providerId || 'demo',
+        models: ['demo-analyst-v1'],
+        fetchedAt: new Date().toISOString()
+      } as AiModelsResult)
+      : api.post<any, AiModelsResult>('/ai/models', payload ?? {})
 }
 
 // 配置API

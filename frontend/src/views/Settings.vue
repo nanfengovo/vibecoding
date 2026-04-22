@@ -260,6 +260,7 @@
                     />
                   </el-select>
                   <el-button @click="addAiProvider">新增模型源</el-button>
+                  <el-button type="primary" plain @click="addNvidiaProvider">导入 NVIDIA 模型源</el-button>
                 </div>
               </el-form-item>
               <el-form-item label="模型源列表">
@@ -271,14 +272,23 @@
                   >
                     <div class="ai-provider-item-header">
                       <span>模型源 {{ index + 1 }}</span>
-                      <el-button
-                        link
-                        type="danger"
-                        :disabled="config.openAi.providers.length <= 1"
-                        @click="removeAiProvider(provider.id)"
-                      >
-                        删除
-                      </el-button>
+                      <div class="provider-actions">
+                        <el-button
+                          link
+                          :loading="Boolean(modelLoadingByProvider[provider.id])"
+                          @click="pullProviderModels(provider)"
+                        >
+                          拉取模型
+                        </el-button>
+                        <el-button
+                          link
+                          type="danger"
+                          :disabled="config.openAi.providers.length <= 1"
+                          @click="removeAiProvider(provider.id)"
+                        >
+                          删除
+                        </el-button>
+                      </div>
                     </div>
                     <el-input v-model="provider.name" placeholder="显示名称，例如 OpenAI 主账号" class="provider-input" />
                     <el-input
@@ -304,6 +314,13 @@
                 </div>
                 <div class="hint-text">
                   支持同一家或不同厂商：每个模型源可配置独立 `API Key + Base URL + 模型列表`，分析时可选择使用。
+                  也支持使用“拉取模型”自动同步厂商当前可用模型（OpenAI 兼容接口）。
+                </div>
+                <div class="hint-text">
+                  NVIDIA 参考文档：
+                  <a href="https://docs.api.nvidia.com" target="_blank" rel="noopener noreferrer">docs.api.nvidia.com</a>
+                  /
+                  <a href="https://build.nvidia.com/models" target="_blank" rel="noopener noreferrer">build.nvidia.com/models</a>
                 </div>
               </el-form-item>
             </template>
@@ -327,7 +344,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { configApi } from '@/api'
+import { aiApi, configApi } from '@/api'
 import type { AiProviderConfig, SystemConfig } from '@/types'
 
 const activeTab = ref('longbridge')
@@ -338,15 +355,20 @@ const testing = ref({
   wechat: false,
   openai: false
 })
+const modelLoadingByProvider = ref<Record<string, boolean>>({})
+const MASKED_VALUE = '******'
+const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1'
 
 function createAiProvider(seed?: Partial<AiProviderConfig>, index = 0): AiProviderConfig {
   const id = String(seed?.id || `provider-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`).trim()
+  const rawModel = typeof seed?.model === 'string' ? seed.model : undefined
+  const trimmedModel = rawModel?.trim() ?? ''
   return {
     id,
     name: String(seed?.name || `模型源 ${index + 1}`).trim() || `模型源 ${index + 1}`,
     apiKey: String(seed?.apiKey || '').trim(),
     baseUrl: String(seed?.baseUrl || '').trim() || 'https://api.openai.com/v1',
-    model: String(seed?.model || '').trim() || 'gpt-5-mini'
+    model: trimmedModel || (rawModel === '' ? '' : 'gpt-5-mini')
   }
 }
 
@@ -559,6 +581,19 @@ function addAiProvider() {
   syncOpenAiLegacyFields()
 }
 
+function addNvidiaProvider() {
+  const next = createAiProvider({
+    name: 'NVIDIA NIM',
+    baseUrl: NVIDIA_BASE_URL,
+    model: ''
+  }, config.value.openAi.providers.length)
+
+  config.value.openAi.providers.push(next)
+  config.value.openAi.activeProviderId = next.id
+  syncOpenAiLegacyFields()
+  ElMessage.info('已添加 NVIDIA 模型源，请填写/确认 API Key 后点击“拉取模型”')
+}
+
 function removeAiProvider(providerId: string) {
   const providers = config.value.openAi.providers
   if (providers.length <= 1) {
@@ -571,6 +606,53 @@ function removeAiProvider(providerId: string) {
     config.value.openAi.activeProviderId = nextProviders[0]?.id || ''
   }
   syncOpenAiLegacyFields()
+}
+
+async function pullProviderModels(provider: AiProviderConfig) {
+  const providerId = String(provider.id || '').trim()
+  if (!providerId) {
+    ElMessage.warning('模型源 ID 无效，无法拉取模型')
+    return
+  }
+
+  modelLoadingByProvider.value = {
+    ...modelLoadingByProvider.value,
+    [providerId]: true
+  }
+
+  try {
+    const apiKey = provider.apiKey === MASKED_VALUE
+      ? undefined
+      : (String(provider.apiKey || '').trim() || undefined)
+
+    const result = await aiApi.listModels({
+      providerId,
+      baseUrl: String(provider.baseUrl || '').trim() || undefined,
+      apiKey
+    })
+
+    const models = Array.from(new Set(
+      (result?.models || [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    ))
+
+    if (models.length === 0) {
+      throw new Error('未获取到模型列表')
+    }
+
+    provider.model = models.join('\n')
+    syncOpenAiLegacyFields()
+    ElMessage.success(`已同步 ${models.length} 个模型`)
+  } catch (error: any) {
+    const message = error?.response?.data?.message || error?.message || '拉取模型失败'
+    ElMessage.error(message)
+  } finally {
+    modelLoadingByProvider.value = {
+      ...modelLoadingByProvider.value,
+      [providerId]: false
+    }
+  }
 }
 
 async function saveOpenAi() {
@@ -659,6 +741,12 @@ onMounted(() => {
     margin-bottom: 8px;
     font-weight: 600;
     color: var(--qt-text-primary);
+  }
+
+  .provider-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   .provider-input + .provider-input {

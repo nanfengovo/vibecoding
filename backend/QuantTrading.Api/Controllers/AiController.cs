@@ -98,6 +98,60 @@ public class AiController : ControllerBase
             return BadRequest(new { message = ex.Message });
         }
     }
+
+    [HttpPost("optimize-prompt")]
+    public async Task<ActionResult<AiPromptOptimizeResult>> OptimizePrompt(
+        [FromBody] AiPromptOptimizeRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request?.Question))
+        {
+            return BadRequest(new { message = "待优化问题不能为空。" });
+        }
+
+        try
+        {
+            var result = await _aiAnalysisService.OptimizePromptAsync(
+                new AiPromptOptimizeInput
+                {
+                    Question = request.Question,
+                    Symbol = request.Symbol ?? string.Empty,
+                    ProviderId = request.ProviderId ?? string.Empty,
+                    Model = request.Model ?? string.Empty
+                },
+                cancellationToken);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpPost("models")]
+    public async Task<ActionResult<AiModelsResult>> GetModels(
+        [FromBody] AiModelsRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _aiAnalysisService.GetModelsAsync(
+                new AiModelsInput
+                {
+                    ProviderId = request?.ProviderId ?? string.Empty,
+                    BaseUrl = request?.BaseUrl ?? string.Empty,
+                    ApiKey = request?.ApiKey ?? string.Empty
+                },
+                cancellationToken);
+
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
 }
 
 public sealed class AnalyzeStockRequest
@@ -118,4 +172,19 @@ public sealed class AiChatRequest
     public string? Focus { get; set; }
     public string? ProviderId { get; set; }
     public string? Model { get; set; }
+}
+
+public sealed class AiPromptOptimizeRequest
+{
+    public string Question { get; set; } = string.Empty;
+    public string? Symbol { get; set; }
+    public string? ProviderId { get; set; }
+    public string? Model { get; set; }
+}
+
+public sealed class AiModelsRequest
+{
+    public string? ProviderId { get; set; }
+    public string? BaseUrl { get; set; }
+    public string? ApiKey { get; set; }
 }

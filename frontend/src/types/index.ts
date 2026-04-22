@@ -283,6 +283,18 @@ export interface AiChatResult {
   generatedAt: string
 }
 
+export interface AiPromptOptimizeResult {
+  model: string
+  optimizedPrompt: string
+  generatedAt: string
+}
+
+export interface AiModelsResult {
+  providerId: string
+  models: string[]
+  fetchedAt: string
+}
+
 export interface PagedResult<T> {
   items: T[]
   total: number
