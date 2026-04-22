@@ -15,9 +15,10 @@ namespace QuantTrading.Api.Services.LongBridge;
 
 public class LongBridgeService : ILongBridgeService
 {
-    private static readonly string[] DefaultSearchMarkets = ["US"];
+    private static readonly string[] DefaultSearchMarkets = ["US", "HK", "SH", "SZ", "SG"];
     private static readonly TimeSpan SecurityListCacheDuration = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan StockSnapshotCacheDuration = TimeSpan.FromMinutes(5);
+    private static readonly DateTime UnknownQuoteTimestamp = DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
     private static readonly Regex StooqKlineRowRegex = new(
         "<tr><td[^>]*>\\d+</td><td[^>]*>([^<]+)</td><td>([^<]+)</td><td>([^<]+)</td><td>([^<]+)</td><td>([^<]+)</td><td[^>]*>[^<]*</td><td[^>]*>[^<]*</td><td>([^<]+)</td></tr>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -456,7 +457,7 @@ public class LongBridgeService : ILongBridgeService
             return null;
         }
 
-        var quotes = await GetQuotesAsync(new List<string> { normalizedSymbol });
+        var quotes = await GetQuotesInternalAsync(new List<string> { normalizedSymbol }, allowFallback: true);
         var quote = quotes.FirstOrDefault();
         if (quote == null)
         {
@@ -488,7 +489,40 @@ public class LongBridgeService : ILongBridgeService
         return quote;
     }
 
+    public async Task<StockQuote?> GetQuoteStrictAsync(string symbol)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalizedSymbol))
+        {
+            return null;
+        }
+
+        var quotes = await GetQuotesInternalAsync(new List<string> { normalizedSymbol }, allowFallback: false);
+        var quote = quotes.FirstOrDefault();
+        if (quote == null || quote.Price <= 0 || quote.Timestamp <= DateTime.UnixEpoch)
+        {
+            return null;
+        }
+
+        if (quote.PreviousClose > 0 && quote.Change == 0)
+        {
+            quote.Change = quote.Price - quote.PreviousClose;
+        }
+
+        if (quote.PreviousClose > 0 && quote.ChangePercent == 0)
+        {
+            quote.ChangePercent = quote.Change / quote.PreviousClose * 100;
+        }
+
+        return quote;
+    }
+
     public async Task<List<StockQuote>> GetQuotesAsync(List<string> symbols)
+    {
+        return await GetQuotesInternalAsync(symbols, allowFallback: true);
+    }
+
+    private async Task<List<StockQuote>> GetQuotesInternalAsync(List<string> symbols, bool allowFallback)
     {
         var result = new List<StockQuote>();
 
@@ -597,6 +631,11 @@ public class LongBridgeService : ILongBridgeService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error parsing quote response");
+        }
+
+        if (!allowFallback)
+        {
+            return result;
         }
 
         var missingSymbols = normalizedSymbols
@@ -1886,12 +1925,12 @@ public class LongBridgeService : ILongBridgeService
     {
         if (token == null || token.Type == JTokenType.Null)
         {
-            return DateTime.UtcNow;
+            return UnknownQuoteTimestamp;
         }
 
         if (!long.TryParse(token.ToString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var raw))
         {
-            return DateTime.UtcNow;
+            return UnknownQuoteTimestamp;
         }
 
         try
@@ -1909,10 +1948,10 @@ public class LongBridgeService : ILongBridgeService
         }
         catch
         {
-            return DateTime.UtcNow;
+            return UnknownQuoteTimestamp;
         }
 
-        return DateTime.UtcNow;
+        return UnknownQuoteTimestamp;
     }
 
     private static DateTime ParseStooqDate(string? value)
@@ -2458,19 +2497,51 @@ public class LongBridgeService : ILongBridgeService
         return account?.Cash ?? 0;
     }
 
-    public async Task<bool> IsMarketOpenAsync(string market = "US")
+    public Task<bool> IsMarketOpenAsync(string market = "US")
     {
-        // US market hours: 9:30 AM - 4:00 PM ET
-        var et = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
-        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, et);
-        
+        var marketCode = NormalizeMarketCode(market);
+        var nowUtc = DateTime.UtcNow;
+
+        TimeZoneInfo timezone;
+        (TimeSpan Start, TimeSpan End)[] sessions;
+
+        switch (marketCode)
+        {
+            case "HK":
+                timezone = ResolveTimeZone("Asia/Hong_Kong", "Hong Kong Standard Time", "Asia/Shanghai", "China Standard Time");
+                sessions =
+                [
+                    (new TimeSpan(9, 30, 0), new TimeSpan(12, 0, 0)),
+                    (new TimeSpan(13, 0, 0), new TimeSpan(16, 0, 0))
+                ];
+                break;
+            case "SH":
+            case "SZ":
+                timezone = ResolveTimeZone("Asia/Shanghai", "China Standard Time");
+                sessions =
+                [
+                    (new TimeSpan(9, 30, 0), new TimeSpan(11, 30, 0)),
+                    (new TimeSpan(13, 0, 0), new TimeSpan(15, 0, 0))
+                ];
+                break;
+            case "SG":
+                timezone = ResolveTimeZone("Asia/Singapore", "Singapore Standard Time");
+                sessions = [(new TimeSpan(9, 0, 0), new TimeSpan(17, 0, 0))];
+                break;
+            case "US":
+            default:
+                timezone = ResolveTimeZone("America/New_York", "Eastern Standard Time");
+                sessions = [(new TimeSpan(9, 30, 0), new TimeSpan(16, 0, 0))];
+                break;
+        }
+
+        var now = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, timezone);
         if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
-            return false;
-        
-        var marketOpen = new TimeSpan(9, 30, 0);
-        var marketClose = new TimeSpan(16, 0, 0);
-        
-        return now.TimeOfDay >= marketOpen && now.TimeOfDay <= marketClose;
+        {
+            return Task.FromResult(false);
+        }
+
+        return Task.FromResult(sessions.Any(session => now.TimeOfDay >= session.Start && now.TimeOfDay <= session.End));
     }
 
     public Task<DateTime?> GetNextMarketOpenAsync(string market = "US")
@@ -2491,6 +2562,49 @@ public class LongBridgeService : ILongBridgeService
         }
         
         return Task.FromResult<DateTime?>(TimeZoneInfo.ConvertTimeToUtc(nextOpen, et));
+    }
+
+    private static string NormalizeMarketCode(string? market)
+    {
+        var normalized = (market ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return "US";
+        }
+
+        if (normalized.StartsWith("SH", StringComparison.OrdinalIgnoreCase))
+        {
+            return "SH";
+        }
+
+        if (normalized.StartsWith("SZ", StringComparison.OrdinalIgnoreCase))
+        {
+            return "SZ";
+        }
+
+        return normalized;
+    }
+
+    private static TimeZoneInfo ResolveTimeZone(params string[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(candidate);
+            }
+            catch
+            {
+                // Try next timezone candidate.
+            }
+        }
+
+        return TimeZoneInfo.Utc;
     }
 
     private sealed record LongBridgeRuntimeConfig

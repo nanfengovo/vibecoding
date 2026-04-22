@@ -8,6 +8,7 @@ public interface ILongBridgeService
 
     // Quote API
     Task<StockQuote?> GetQuoteAsync(string symbol);
+    Task<StockQuote?> GetQuoteStrictAsync(string symbol);
     Task<List<StockQuote>> GetQuotesAsync(List<string> symbols);
     Task<List<StockKline>> GetKlineAsync(string symbol, string period, DateTime? start = null, DateTime? end = null, int count = 100);
     Task<Stock?> GetStockInfoAsync(string symbol);

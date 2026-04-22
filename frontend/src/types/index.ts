@@ -281,6 +281,19 @@ export interface AiChatResult {
   model: string
   content: string
   generatedAt: string
+  marketContext?: AiChatMarketContext
+}
+
+export interface AiChatMarketContext {
+  symbol: string
+  market: string
+  price: number
+  changePercent: number
+  quoteTime: string
+  lagSeconds: number
+  marketOpen: boolean
+  freshness: 'realtime' | 'delayed_close' | 'stale'
+  source: string
 }
 
 export interface AiPromptOptimizeResult {

@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { aiApi } from '@/api'
+import type { AiChatMarketContext } from '@/types'
 
 export interface AiChatMessage {
   id: string
@@ -8,6 +9,7 @@ export interface AiChatMessage {
   content: string
   time: string
   model?: string
+  marketContext?: AiChatMarketContext
   isError?: boolean
 }
 
@@ -52,6 +54,31 @@ function normalizeTitle(input: string) {
   return `${clean.slice(0, 26)}...`
 }
 
+function buildAiErrorHint(message: string) {
+  const normalized = String(message || '').toLowerCase()
+  if (!normalized) {
+    return ''
+  }
+
+  if (normalized.includes('未识别到标的') || normalized.includes('补充证券代码')) {
+    return '\n建议：请在“标的”输入框填写代码（如 601899.SH / AAPL.US）或公司名称。'
+  }
+
+  if (normalized.includes('未获取到有效实时行情') || normalized.includes('行情时间已过期')) {
+    return '\n建议：请检查长桥 Token 权限、证券代码格式及市场交易时段。'
+  }
+
+  if (normalized.includes('仅返回关注快照') || normalized.includes('未返回实时成交行情')) {
+    return '\n建议：当前长桥权限可能仅支持快照，请开通实时行情权限后重试。'
+  }
+
+  if (normalized.includes('access token') || normalized.includes('token') || normalized.includes('权限')) {
+    return '\n建议：请在系统设置中检查长桥凭证是否正确并重新测试连接。'
+  }
+
+  return ''
+}
+
 function createSession(seed?: Partial<AiChatSession>): AiChatSession {
   const now = new Date().toISOString()
   return {
@@ -87,6 +114,19 @@ function parsePersistedState(raw: string | null): PersistedAiChatState | null {
             content: String(row?.content || ''),
             time: String(row?.time || new Date().toISOString()),
             model: row?.model ? String(row.model) : undefined,
+            marketContext: row?.marketContext && typeof row.marketContext === 'object'
+              ? {
+                symbol: String(row.marketContext.symbol || ''),
+                market: String(row.marketContext.market || ''),
+                price: Number(row.marketContext.price || 0),
+                changePercent: Number(row.marketContext.changePercent || 0),
+                quoteTime: String(row.marketContext.quoteTime || new Date().toISOString()),
+                lagSeconds: Number(row.marketContext.lagSeconds || 0),
+                marketOpen: Boolean(row.marketContext.marketOpen),
+                freshness: String(row.marketContext.freshness || 'stale') as AiChatMarketContext['freshness'],
+                source: String(row.marketContext.source || 'longbridge')
+              }
+              : undefined,
             isError: Boolean(row?.isError)
           }))
           : []
@@ -351,6 +391,7 @@ export const useAiChatStore = defineStore('ai-chat', () => {
           content: String(result?.content || ''),
           time: String(result?.generatedAt || new Date().toISOString()),
           model: String(result?.model || model || ''),
+          marketContext: result?.marketContext,
           isError: false
         }
       ])
@@ -366,7 +407,7 @@ export const useAiChatStore = defineStore('ai-chat', () => {
         {
           id: createMessageId('a'),
           role: 'assistant',
-          content: `调用失败：${message}`,
+          content: `调用失败：${message}${buildAiErrorHint(message)}`,
           time: new Date().toISOString(),
           model: model || undefined,
           isError: true

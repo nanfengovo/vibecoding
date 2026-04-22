@@ -114,6 +114,19 @@
               </el-button>
             </div>
 
+            <div
+              v-if="item.role === 'assistant' && item.marketContext"
+              class="market-context"
+            >
+              <span class="market-chip source">{{ item.marketContext.source }}</span>
+              <span class="market-chip symbol">{{ item.marketContext.symbol }}</span>
+              <span class="market-chip">行情时间 {{ formatQuoteTime(item.marketContext.quoteTime) }}</span>
+              <span class="market-chip">时延 {{ formatLag(item.marketContext.lagSeconds) }}</span>
+              <span :class="['market-chip', 'freshness', item.marketContext.freshness]">
+                {{ freshnessLabel(item.marketContext.freshness) }}
+              </span>
+            </div>
+
             <pre v-if="item.role === 'assistant' && isRawMode(item.id)" class="msg-content raw-content">{{ item.content }}</pre>
             <div
               v-else-if="item.role === 'assistant'"
@@ -159,7 +172,7 @@ import dayjs from 'dayjs'
 import { Delete, MagicStick, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { aiApi, configApi } from '@/api'
-import type { AiProviderConfig, SystemConfig } from '@/types'
+import type { AiChatMarketContext, AiProviderConfig, SystemConfig } from '@/types'
 import { useAiChatStore } from '@/stores/aiChat'
 import { parseAiMarkdown } from '@/utils/aiMarkdown'
 
@@ -331,6 +344,35 @@ function applyPrompt(value: string) {
 
 function formatTime(value: string) {
   return dayjs(value).format('MM-DD HH:mm:ss')
+}
+
+function formatQuoteTime(value: string) {
+  const parsed = dayjs(value)
+  if (!parsed.isValid()) {
+    return value
+  }
+  return parsed.format('MM-DD HH:mm:ss')
+}
+
+function formatLag(value: number) {
+  const seconds = Number(value || 0)
+  if (seconds < 60) {
+    return `${seconds}s`
+  }
+  if (seconds < 3600) {
+    return `${Math.round(seconds / 60)}m`
+  }
+  return `${(seconds / 3600).toFixed(1)}h`
+}
+
+function freshnessLabel(freshness: AiChatMarketContext['freshness']) {
+  if (freshness === 'realtime') {
+    return '实时'
+  }
+  if (freshness === 'delayed_close') {
+    return '闭市延迟'
+  }
+  return '过期'
 }
 
 function isRawMode(messageId: string) {
@@ -629,6 +671,52 @@ onMounted(() => {
       padding: 0;
       font-size: 12px;
       margin-left: auto;
+    }
+  }
+
+  .market-context {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .market-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--qt-text-secondary);
+    border: 1px solid color-mix(in srgb, var(--qt-border) 88%, #94a3b8 12%);
+    background: color-mix(in srgb, var(--qt-card-bg) 94%, #64748b 6%);
+
+    &.source {
+      color: #334155;
+      border-color: color-mix(in srgb, #64748b 32%, var(--qt-border) 68%);
+    }
+
+    &.symbol {
+      color: #1d4ed8;
+      border-color: color-mix(in srgb, #3b82f6 45%, var(--qt-border) 55%);
+    }
+
+    &.freshness.realtime {
+      color: #0f766e;
+      border-color: color-mix(in srgb, #14b8a6 48%, var(--qt-border) 52%);
+      background: color-mix(in srgb, #14b8a6 16%, var(--qt-card-bg) 84%);
+    }
+
+    &.freshness.delayed_close {
+      color: #92400e;
+      border-color: color-mix(in srgb, #f59e0b 50%, var(--qt-border) 50%);
+      background: color-mix(in srgb, #f59e0b 16%, var(--qt-card-bg) 84%);
+    }
+
+    &.freshness.stale {
+      color: #991b1b;
+      border-color: color-mix(in srgb, #ef4444 55%, var(--qt-border) 45%);
+      background: color-mix(in srgb, #ef4444 14%, var(--qt-card-bg) 86%);
     }
   }
 

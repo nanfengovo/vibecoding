@@ -82,12 +82,12 @@ function findGroup(groups, groupName, groupId = null) {
 function parseQuoteTimestampToIso(value) {
   const raw = toNumber(value, 0)
   if (!Number.isFinite(raw) || raw <= 0) {
-    return new Date().toISOString()
+    return ''
   }
 
   const ms = raw > 1_000_000_000_000 ? raw : raw * 1000
   const parsed = new Date(ms)
-  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString()
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString()
 }
 
 function normalizeQuoteRow(quote, fallbackSymbol) {

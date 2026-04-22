@@ -1,4 +1,6 @@
 import type {
+  AiChatMarketContext,
+  AiChatResult,
   AiProviderConfig,
   Backtest,
   Candlestick,
@@ -57,6 +59,8 @@ type DemoRealtimeQuote = {
   change: number
   changePercent: number
   timestamp: string
+  isRealtime: boolean
+  source?: string
 }
 
 type DemoStaticInfo = {
@@ -102,6 +106,34 @@ const DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'TSLA']
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on'])
 const FALSE_VALUES = new Set(['0', 'false', 'no', 'off'])
 const SUPPORTED_MARKETS = new Set(['US', 'HK', 'SH', 'SZ', 'SG'])
+const REALTIME_STALE_THRESHOLD_SECONDS = 25 * 60
+const REALTIME_QUESTION_KEYWORDS = [
+  '最新', '实时', '现价', '股价', '价格', '涨跌', '开盘', '收盘', '行情', '报价', '多少', '最新价',
+  'last price', 'live price', 'realtime', 'real-time', 'quote', 'latest price', 'current price'
+]
+const MARKET_TIMEZONE: Record<string, string> = {
+  US: 'America/New_York',
+  HK: 'Asia/Hong_Kong',
+  SH: 'Asia/Shanghai',
+  SZ: 'Asia/Shanghai',
+  SG: 'Asia/Singapore'
+}
+const MARKET_TRADING_SESSIONS: Record<string, Array<{ startMinute: number; endMinute: number }>> = {
+  US: [{ startMinute: 9 * 60 + 30, endMinute: 16 * 60 }],
+  HK: [
+    { startMinute: 9 * 60 + 30, endMinute: 12 * 60 },
+    { startMinute: 13 * 60, endMinute: 16 * 60 }
+  ],
+  SH: [
+    { startMinute: 9 * 60 + 30, endMinute: 11 * 60 + 30 },
+    { startMinute: 13 * 60, endMinute: 15 * 60 }
+  ],
+  SZ: [
+    { startMinute: 9 * 60 + 30, endMinute: 11 * 60 + 30 },
+    { startMinute: 13 * 60, endMinute: 15 * 60 }
+  ],
+  SG: [{ startMinute: 9 * 60, endMinute: 17 * 60 }]
+}
 
 let demoNoticeShown = false
 let cachedState: DemoState | null = null
@@ -283,6 +315,73 @@ function parseMaybeDate(value?: string): number | null {
   }
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function toMarketCode(value: string): string {
+  const normalized = String(value || '').trim().toUpperCase()
+  if (!normalized) {
+    return 'US'
+  }
+  if (normalized.startsWith('SH')) {
+    return 'SH'
+  }
+  if (normalized.startsWith('SZ')) {
+    return 'SZ'
+  }
+  return normalized
+}
+
+function getMarketLocalTimeParts(timestampMs: number, market: string): { weekDay: number; minutes: number } | null {
+  const marketCode = toMarketCode(market)
+  const timeZone = MARKET_TIMEZONE[marketCode] || MARKET_TIMEZONE.US
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    })
+    const parts = formatter.formatToParts(new Date(timestampMs))
+    const weekDayRaw = parts.find((item) => item.type === 'weekday')?.value || ''
+    const hour = Number(parts.find((item) => item.type === 'hour')?.value || 0)
+    const minute = Number(parts.find((item) => item.type === 'minute')?.value || 0)
+
+    const weekMap: Record<string, number> = {
+      Mon: 1,
+      Tue: 2,
+      Wed: 3,
+      Thu: 4,
+      Fri: 5,
+      Sat: 6,
+      Sun: 0
+    }
+    const weekDay = weekMap[weekDayRaw] ?? -1
+    if (weekDay < 0 || !Number.isFinite(hour) || !Number.isFinite(minute)) {
+      return null
+    }
+
+    return {
+      weekDay,
+      minutes: hour * 60 + minute
+    }
+  } catch {
+    return null
+  }
+}
+
+function isMarketOpenNow(market: string, atMs = Date.now()): boolean {
+  const marketCode = toMarketCode(market)
+  const sessions = MARKET_TRADING_SESSIONS[marketCode] || MARKET_TRADING_SESSIONS.US
+  const local = getMarketLocalTimeParts(atMs, marketCode)
+  if (!local) {
+    return false
+  }
+  if (local.weekDay === 0 || local.weekDay === 6) {
+    return false
+  }
+
+  return sessions.some((session) => local.minutes >= session.startMinute && local.minutes <= session.endMinute)
 }
 
 function getMeta(symbol: string): SymbolMeta {
@@ -543,13 +642,19 @@ function buildLibraryUniverse(): DemoSecurity[] {
   }))
 }
 
-async function fetchLongBridgeSecurityList(config: LongBridgeLikeConfig): Promise<DemoSecurity[]> {
+async function fetchLongBridgeSecurityList(
+  config: LongBridgeLikeConfig,
+  options?: { market?: string; category?: string }
+): Promise<DemoSecurity[]> {
   const accessToken = String(config.accessToken || '').trim()
   const appKey = String(config.appKey || '').trim()
   const appSecret = String(config.appSecret || '').trim()
   if (!accessToken) {
     return []
   }
+
+  const market = toMarketCode(options?.market || 'US')
+  const category = String(options?.category || 'Overnight').trim() || 'Overnight'
 
   const response = await fetch('/api/longbridge/security-list', {
     method: 'POST',
@@ -561,8 +666,8 @@ async function fetchLongBridgeSecurityList(config: LongBridgeLikeConfig): Promis
       appKey,
       appSecret,
       baseUrl: normalizeLongBridgeBaseUrl(config.baseUrl || ''),
-      market: 'US',
-      category: 'Overnight'
+      market,
+      category
     })
   })
 
@@ -607,7 +712,20 @@ async function getSecurityUniverse(): Promise<DemoSecurity[]> {
 
   let longBridgeRows: DemoSecurity[] = []
   if (token) {
-    longBridgeRows = await fetchLongBridgeSecurityList(config)
+    const marketRequests: Array<{ market: string; category: string }> = [
+      { market: 'US', category: 'Overnight' },
+      { market: 'HK', category: 'Overnight' },
+      { market: 'SH', category: 'Overnight' },
+      { market: 'SZ', category: 'Overnight' },
+      { market: 'SG', category: 'Overnight' }
+    ]
+
+    const settled = await Promise.allSettled(
+      marketRequests.map((request) => fetchLongBridgeSecurityList(config, request))
+    )
+    longBridgeRows = settled
+      .filter((row): row is PromiseFulfilledResult<DemoSecurity[]> => row.status === 'fulfilled')
+      .flatMap((row) => row.value)
   }
 
   const merged = token
@@ -669,6 +787,20 @@ async function resolveSecurity(value: string): Promise<DemoSecurity | null> {
   const byTicker = universe.find((item) => item.ticker === normalizedTicker)
   if (byTicker) {
     return byTicker
+  }
+
+  const rawKeyword = String(value || '').trim()
+  if (rawKeyword && !isLikelySymbolKeyword(rawKeyword)) {
+    const byNameExact = universe.find((item) => String(item.name || '').trim() === rawKeyword)
+    if (byNameExact) {
+      return byNameExact
+    }
+
+    const keywordLower = rawKeyword.toLowerCase()
+    const byNameContains = universe.find((item) => String(item.name || '').toLowerCase().includes(keywordLower))
+    if (byNameContains) {
+      return byNameContains
+    }
   }
 
   const inferred = inferSecurityFromInput(value)
@@ -824,7 +956,7 @@ async function fetchLongBridgeStaticInfos(
 async function fetchLongBridgeRealtimeQuotes(
   config: LongBridgeLikeConfig,
   symbols: string[]
-): Promise<StockQuote[]> {
+): Promise<DemoRealtimeQuote[]> {
   if (!hasLongBridgeToken(config)) {
     return []
   }
@@ -869,6 +1001,8 @@ async function fetchLongBridgeRealtimeQuotes(
     console.warn('[longbridge-quote]', payload.warning)
   }
 
+  const source = String(payload?.source || '').trim()
+  const sourceIsRealtime = source === 'longbridge-realtime'
   const list = Array.isArray(payload?.list) ? payload.list : []
   return list
     .map((item: any) => ({
@@ -883,9 +1017,10 @@ async function fetchLongBridgeRealtimeQuotes(
       turnover: toFiniteNumber(item?.turnover, 0),
       change: toFiniteNumber(item?.change, Number.NaN),
       changePercent: toFiniteNumber(item?.changePercent, Number.NaN),
-      timestamp: String(item?.timestamp || '')
+      timestamp: String(item?.timestamp || ''),
+      isRealtime: item?.isRealtime === undefined ? sourceIsRealtime : Boolean(item?.isRealtime),
+      source
     } satisfies DemoRealtimeQuote))
-    .map(buildQuoteFromRealtime)
 }
 
 function buildCompanyProfileFallback(symbol: string, nameHint?: string): CompanyProfile {
@@ -953,21 +1088,37 @@ async function fetchLongBridgeCompanyProfile(
   }
 }
 
-async function getRealtimeQuotes(symbols: string[]): Promise<StockQuote[]> {
+async function getRealtimeQuotes(
+  symbols: string[],
+  options?: { requireRealtime?: boolean }
+): Promise<StockQuote[]> {
   const normalizedSymbols = Array.from(new Set(symbols.map((item) => normalizeSymbol(item)).filter(Boolean)))
   if (normalizedSymbols.length === 0) {
     return []
   }
 
+  const requireRealtime = options?.requireRealtime === true
   const config = getState().config.longBridge
   if (!hasLongBridgeToken(config)) {
+    if (requireRealtime) {
+      throw new Error('未配置长桥 Access Token，无法提供实时行情。')
+    }
     return normalizedSymbols.map((symbol) => buildQuote(symbol))
   }
 
-  const liveQuotes = await fetchLongBridgeRealtimeQuotes(config, normalizedSymbols)
-  if (liveQuotes.length === 0) {
+  const liveRows = await fetchLongBridgeRealtimeQuotes(config, normalizedSymbols)
+  if (liveRows.length === 0) {
     throw new Error('长桥实时行情返回为空，请检查凭证权限或证券代码格式')
   }
+
+  const strictRows = requireRealtime
+    ? liveRows.filter((item) => item.isRealtime)
+    : liveRows
+  if (strictRows.length === 0) {
+    throw new Error('当前账号仅返回关注快照，未返回实时成交行情，无法用于严格实时问答。')
+  }
+
+  const liveQuotes = strictRows.map(buildQuoteFromRealtime)
 
   const bySymbol = new Map<string, StockQuote>()
   liveQuotes.forEach((quote) => {
@@ -1262,6 +1413,132 @@ function buildAiAnalysisPrompt(
     '',
     `关注点：${focus}`
   ].join('\n')
+}
+
+function isRealtimeSensitiveQuestion(question: string): boolean {
+  const normalized = String(question || '').trim().toLowerCase()
+  if (!normalized) {
+    return false
+  }
+  return REALTIME_QUESTION_KEYWORDS.some((keyword) => normalized.includes(String(keyword).toLowerCase()))
+}
+
+function extractChineseNameCandidates(question: string): string[] {
+  const rows = (String(question || '').match(/[\u4e00-\u9fff]{2,18}/g) || [])
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      let next = item
+      ;[
+        '股票', '股价', '价格', '行情', '走势', '分析', '最新', '实时', '现在', '获取', '帮我', '请问', '一下',
+        '看看', '查询', '多少', '的', '股', '一只', '标的', '美股', '港股', 'A股', 'a股', '今日', '今天', '当前'
+      ].forEach((noise) => {
+        next = next.split(noise).join('')
+      })
+      return next.trim()
+    })
+    .filter((item) => item.length >= 2 && item.length <= 10)
+
+  return Array.from(new Set(rows)).slice(0, 6)
+}
+
+async function resolveChatTargetSymbol(inputSymbol: string | undefined, question: string): Promise<DemoSecurity | null> {
+  const direct = String(inputSymbol || '').trim()
+  if (direct) {
+    const resolved = await resolveSecurity(direct)
+    if (resolved) {
+      return resolved
+    }
+  }
+
+  const symbolTokens = Array.from(
+    new Set(
+      (String(question || '').toUpperCase().match(/\b(?:[A-Z]{1,5}\.(?:US|HK|SG)|\d{5}\.HK|\d{6}\.(?:SH|SZ)|(?:SH|SZ)\d{6}|[A-Z]{1,5}|\d{5}|\d{6})\b/g) || [])
+        .map((item) => item.trim())
+        .filter((item) => item.length > 1)
+    )
+  ).slice(0, 8)
+
+  for (const token of symbolTokens) {
+    const resolved = await resolveSecurity(token)
+    if (resolved) {
+      return resolved
+    }
+  }
+
+  for (const candidate of extractChineseNameCandidates(question)) {
+    const resolved = await resolveSecurity(candidate)
+    if (resolved) {
+      return resolved
+    }
+  }
+
+  return null
+}
+
+function buildChatMarketContext(quote: StockQuote, market: string): AiChatMarketContext {
+  const quoteTime = String(quote.timestamp || '').trim()
+  const quoteTimeMs = Date.parse(quoteTime)
+  if (!Number.isFinite(quoteTimeMs)) {
+    throw new Error('行情时间戳不可用，无法判定实时性。')
+  }
+
+  const marketCode = toMarketCode(String(market || normalizeLookupSymbol(quote.symbol).split('.').pop() || 'US'))
+  const marketOpen = isMarketOpenNow(marketCode)
+  const lagSecondsRaw = Math.round((Date.now() - quoteTimeMs) / 1000)
+  const lagSeconds = Math.max(0, lagSecondsRaw)
+
+  let freshness: AiChatMarketContext['freshness'] = 'delayed_close'
+  if (marketOpen) {
+    freshness = lagSeconds <= REALTIME_STALE_THRESHOLD_SECONDS ? 'realtime' : 'stale'
+  }
+
+  return {
+    symbol: normalizeLookupSymbol(quote.symbol),
+    market: marketCode,
+    price: Number(quote.current || 0),
+    changePercent: Number(quote.changePercent || 0),
+    quoteTime,
+    lagSeconds,
+    marketOpen,
+    freshness,
+    source: 'longbridge'
+  }
+}
+
+function buildStrictChatPrompt(question: string, focus: string, marketContext?: AiChatMarketContext): string {
+  const rows = [
+    '你是专业交易助手，请使用简洁中文回答。',
+    '若涉及价格判断，必须只使用下面给出的实时行情，不得引用训练记忆历史价格。',
+    ''
+  ]
+
+  if (marketContext) {
+    rows.push(
+      '实时行情上下文（可信数据源）：',
+      `- 标的：${marketContext.symbol}`,
+      `- 市场：${marketContext.market}`,
+      `- 最新价：${marketContext.price}`,
+      `- 涨跌幅：${marketContext.changePercent}%`,
+      `- 行情时间(UTC)：${marketContext.quoteTime}`,
+      `- 时延：${marketContext.lagSeconds} 秒`,
+      `- 新鲜度：${marketContext.freshness}`,
+      `- 来源：${marketContext.source}`,
+      ''
+    )
+  }
+
+  if (focus) {
+    rows.push(`关注点：${focus}`, '')
+  }
+
+  rows.push(
+    `用户问题：${question}`,
+    '',
+    '请按“结论 / 依据 / 风险提示”结构回复，并明确“不构成投资建议”。'
+  )
+
+  return rows.join('\n')
 }
 
 function withStockInfo(item: WatchlistItem): WatchlistItem {
@@ -2521,39 +2798,59 @@ export const demoApi = {
       focus?: string
       providerId?: string
       model?: string
-    }): Promise<{ model: string; content: string; generatedAt: string }> {
+    }): Promise<AiChatResult> {
       const question = String(payload?.question || '').trim()
       if (!question) {
         throw new Error('请输入问题')
       }
 
-      const normalizedSymbol = String(payload?.symbol || '').trim().toUpperCase()
       const focus = String(payload?.focus || '').trim()
+      const longBridgeConfig = getState().config.longBridge
       const openAiConfig = getState().config.openAi
+      const realtimeSensitive = isRealtimeSensitiveQuestion(question)
+      const resolvedSecurity = await resolveChatTargetSymbol(payload?.symbol, question)
 
-      const promptLines = [
-        '你是量化交易与股票分析助手，请使用简洁中文回答。',
-        '要求：',
-        '1) 先给结论，再给依据，最后给风险提示',
-        '2) 若涉及价格判断，明确“不构成投资建议”',
-        ''
-      ]
-
-      if (normalizedSymbol) {
-        const quote = buildQuote(normalizedSymbol)
-        promptLines.push(
-          `上下文标的：${normalizedSymbol}`,
-          `当前模拟价：${quote.current}，涨跌幅：${quote.changePercent}%`,
-          ''
-        )
+      if (realtimeSensitive && !resolvedSecurity) {
+        throw new Error('这是实时行情问题，但未识别到标的。请补充证券代码或公司名称（如 601899.SH / 紫金矿业）。')
       }
 
-      if (focus) {
-        promptLines.push(`关注点：${focus}`, '')
+      if (realtimeSensitive && !hasLongBridgeToken(longBridgeConfig)) {
+        throw new Error('未配置长桥 Access Token，无法提供实时行情。请先在系统设置完成长桥配置。')
       }
 
-      promptLines.push(`用户问题：${question}`)
-      const userPrompt = promptLines.join('\n')
+      let marketContext: AiChatMarketContext | undefined
+      if (resolvedSecurity && hasLongBridgeToken(longBridgeConfig)) {
+        let realtimeQuote: StockQuote | null = null
+        try {
+          const rows = await getRealtimeQuotes([resolvedSecurity.symbol], {
+            requireRealtime: realtimeSensitive
+          })
+          realtimeQuote = rows[0] || null
+        } catch (error: any) {
+          if (realtimeSensitive) {
+            throw new Error(error?.message || '未获取到有效实时行情，请检查证券代码格式与长桥权限。')
+          }
+        }
+
+        if (realtimeQuote) {
+          try {
+            marketContext = buildChatMarketContext(realtimeQuote, resolvedSecurity.market)
+          } catch (error: any) {
+            if (realtimeSensitive) {
+              throw new Error(error?.message || '行情时间戳不可用，无法提供严格实时回答。')
+            }
+            marketContext = undefined
+          }
+
+          if (realtimeSensitive && marketContext?.freshness === 'stale') {
+            throw new Error(`行情时间已过期（${marketContext.lagSeconds} 秒），请稍后重试或检查长桥连接状态。`)
+          }
+        } else if (realtimeSensitive) {
+          throw new Error('未获取到有效实时行情，请检查证券代码格式与长桥权限。')
+        }
+      }
+
+      const userPrompt = buildStrictChatPrompt(question, focus, marketContext)
 
       if (openAiConfig.enabled) {
         const provider = pickAiProvider(openAiConfig, payload?.providerId)
@@ -2566,23 +2863,29 @@ export const demoApi = {
         return {
           model: result.model,
           content: result.content,
-          generatedAt: nowIso()
+          generatedAt: nowIso(),
+          marketContext
         }
+      }
+
+      if (realtimeSensitive) {
+        throw new Error('AI 模型未启用，且该问题需要实时行情分析。请先启用模型源后重试。')
       }
 
       return {
         model: 'demo-chat-v1',
         content: [
-          '结论：当前为演示模式，建议先连通真实行情后再做交易决策。',
+          '结论：当前可继续进行方法论咨询，但行情类问题已强制要求真实实时数据。',
           '',
           '依据：',
-          '- 你当前处于前端独立模式，账号与持仓数据是本地模拟；',
+          '- 你当前处于前端独立模式；',
           '- 问题可继续追问，我会按交易框架给出思路。',
           '',
           '风险提示：',
           '- 本回答不构成投资建议，请结合真实账户与风险偏好决策。'
         ].join('\n'),
-        generatedAt: nowIso()
+        generatedAt: nowIso(),
+        marketContext
       }
     }
   },

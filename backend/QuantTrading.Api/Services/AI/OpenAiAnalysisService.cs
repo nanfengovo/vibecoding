@@ -1,27 +1,51 @@
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using QuantTrading.Api.Data;
+using QuantTrading.Api.Services.LongBridge;
 
 namespace QuantTrading.Api.Services.AI;
 
 public sealed class OpenAiAnalysisService : IAiAnalysisService
 {
     private const string MaskedValue = "******";
+    private const int RealtimeStaleThresholdSeconds = 25 * 60;
+    private static readonly Regex SymbolPattern = new(
+        @"\b(?:[A-Z]{1,5}\.(?:US|HK|SG)|\d{5}\.HK|\d{6}\.(?:SH|SZ)|(?:SH|SZ)\d{6}|[A-Z]{1,5}|\d{5}|\d{6})\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> TickerStopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AI", "A", "AN", "THE", "AND", "OR", "ETF", "USD", "CNY", "HKD", "RMB", "CNH",
+        "NOW", "TODAY", "LIVE", "REALTIME", "PRICE", "MARKET", "STOCK"
+    };
+    private static readonly string[] RealtimeKeywords =
+    {
+        "最新", "实时", "现价", "股价", "价格", "涨跌", "开盘", "收盘", "行情", "报价", "多少", "最新价",
+        "last price", "live", "latest", "latest price", "current price", "quote"
+    };
+    private static readonly string[] ChineseNoiseWords =
+    {
+        "股票", "股价", "价格", "行情", "走势", "分析", "最新", "实时", "现在", "获取", "帮我", "请问", "一下",
+        "看看", "查询", "多少", "的", "股", "一只", "标的", "美股", "港股", "a股", "A股", "今日", "今天", "当前"
+    };
     private readonly QuantTradingDbContext _dbContext;
     private readonly IConfiguration _configuration;
+    private readonly ILongBridgeService _longBridgeService;
     private readonly ILogger<OpenAiAnalysisService> _logger;
 
     public OpenAiAnalysisService(
         QuantTradingDbContext dbContext,
         IConfiguration configuration,
+        ILongBridgeService longBridgeService,
         ILogger<OpenAiAnalysisService> logger)
     {
         _dbContext = dbContext;
         _configuration = configuration;
+        _longBridgeService = longBridgeService;
         _logger = logger;
     }
 
@@ -135,26 +159,39 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             throw new InvalidOperationException("问题不能为空。");
         }
 
-        var systemPrompt = "你是专业交易助手。请给出结构化、简洁、可执行的中文回答，并包含风险提示。";
-        var sb = new StringBuilder();
-        if (!string.IsNullOrWhiteSpace(input.Symbol))
+        var marketSensitive = IsRealtimeSensitiveQuestion(question);
+        var resolvedSymbol = await ResolveChatSymbolAsync(input.Symbol, question, cancellationToken);
+        if (marketSensitive && string.IsNullOrWhiteSpace(resolvedSymbol))
         {
-            sb.AppendLine($"标的：{input.Symbol.Trim().ToUpperInvariant()}");
+            throw new InvalidOperationException("这是实时行情问题，但未识别到标的。请补充证券代码或公司名称（如 601899.SH / 紫金矿业）。");
         }
-        if (!string.IsNullOrWhiteSpace(input.Focus))
+
+        AiChatMarketContext? marketContext = null;
+        if (!string.IsNullOrWhiteSpace(resolvedSymbol))
         {
-            sb.AppendLine($"关注点：{input.Focus.Trim()}");
+            marketContext = await BuildMarketContextAsync(resolvedSymbol, cancellationToken);
+            if (marketContext == null && marketSensitive)
+            {
+                throw new InvalidOperationException("未获取到有效实时行情，请检查证券代码格式与长桥权限。");
+            }
+
+            if (marketSensitive && marketContext?.Freshness == "stale")
+            {
+                throw new InvalidOperationException(
+                    $"行情时间已过期（{marketContext.LagSeconds} 秒），请稍后重试或检查长桥连接状态。");
+            }
         }
-        sb.AppendLine($"用户问题：{question}");
-        sb.AppendLine();
-        sb.AppendLine("请按“结论 / 依据 / 风险提示”结构回复。");
-        sb.AppendLine("注意：不构成投资建议。");
+
+        var systemPrompt = marketSensitive
+            ? "你是专业交易助手。必须仅基于用户给定的实时行情上下文回答，不得引用训练记忆中的历史价格。若上下文不足，明确说明无法判断。"
+            : "你是专业交易助手。请给出结构化、简洁、可执行的中文回答，并包含风险提示。";
+        var userPrompt = BuildChatPrompt(input, question, marketContext);
 
         var modelOverride = (input.Model ?? string.Empty).Trim();
         var (success, content, error, modelUsed) = await SendChatCompletionAsync(
             provider,
             systemPrompt,
-            sb.ToString(),
+            userPrompt,
             cancellationToken,
             modelOverride);
 
@@ -170,7 +207,8 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
                 ? (string.IsNullOrWhiteSpace(modelOverride) ? provider.Model : modelOverride)
                 : modelUsed,
             Content = content.Trim(),
-            GeneratedAt = DateTime.UtcNow
+            GeneratedAt = DateTime.UtcNow,
+            MarketContext = marketContext
         };
     }
 
@@ -637,6 +675,340 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
         sb.AppendLine("5) 结论（一句话）");
         sb.AppendLine("注意：不构成投资建议。");
         return sb.ToString();
+    }
+
+    private async Task<string> ResolveChatSymbolAsync(
+        string? inputSymbol,
+        string question,
+        CancellationToken cancellationToken)
+    {
+        var direct = NormalizeSymbol(inputSymbol ?? string.Empty);
+        if (!string.IsNullOrWhiteSpace(direct))
+        {
+            var resolved = await TryResolveSymbolCandidateAsync(direct, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(resolved))
+            {
+                return resolved;
+            }
+        }
+
+        foreach (var candidate in ExtractSymbolCandidatesFromQuestion(question))
+        {
+            var resolved = await TryResolveSymbolCandidateAsync(candidate, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(resolved))
+            {
+                return resolved;
+            }
+        }
+
+        foreach (var keyword in ExtractChineseKeywordCandidates(question))
+        {
+            var rows = await _longBridgeService.SearchStocksAsync(keyword);
+            var matched = rows.FirstOrDefault();
+            if (matched != null)
+            {
+                return NormalizeSymbol(matched.Symbol);
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private async Task<string> TryResolveSymbolCandidateAsync(
+        string candidate,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return string.Empty;
+        }
+
+        var normalized = NormalizeSymbol(candidate);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var rows = await _longBridgeService.SearchStocksAsync(normalized);
+        var matched = rows.FirstOrDefault(item => SymbolEquals(item.Symbol, normalized))
+            ?? rows.FirstOrDefault(item => NormalizeSymbol(item.Symbol).StartsWith(normalized, StringComparison.OrdinalIgnoreCase))
+            ?? rows.FirstOrDefault();
+        if (matched != null)
+        {
+            return NormalizeSymbol(matched.Symbol);
+        }
+
+        var stock = await _longBridgeService.GetStockInfoAsync(normalized);
+        if (stock == null)
+        {
+            return string.Empty;
+        }
+
+        return NormalizeSymbol(stock.Symbol);
+    }
+
+    private async Task<AiChatMarketContext?> BuildMarketContextAsync(
+        string symbol,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var quote = await _longBridgeService.GetQuoteStrictAsync(normalized);
+        if (quote == null || quote.Price <= 0)
+        {
+            return null;
+        }
+
+        var quoteTime = EnsureUtc(quote.Timestamp);
+        if (quoteTime <= DateTime.UnixEpoch)
+        {
+            return null;
+        }
+
+        var market = InferMarketFromSymbol(normalized);
+        bool marketOpen;
+        try
+        {
+            marketOpen = await _longBridgeService.IsMarketOpenAsync(market);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to get market status for {Symbol}", normalized);
+            marketOpen = false;
+        }
+
+        var lagSeconds = Math.Max(0, (int)Math.Round((DateTime.UtcNow - quoteTime).TotalSeconds));
+        var freshness = DetermineFreshness(lagSeconds, marketOpen);
+
+        return new AiChatMarketContext
+        {
+            Symbol = normalized,
+            Market = market,
+            Price = quote.Price,
+            ChangePercent = quote.ChangePercent,
+            QuoteTime = quoteTime,
+            LagSeconds = lagSeconds,
+            MarketOpen = marketOpen,
+            Freshness = freshness,
+            Source = "longbridge"
+        };
+    }
+
+    private static string BuildChatPrompt(
+        AiChatInput input,
+        string question,
+        AiChatMarketContext? marketContext)
+    {
+        var sb = new StringBuilder();
+        if (marketContext != null)
+        {
+            sb.AppendLine("实时行情上下文（可信数据源）：");
+            sb.AppendLine($"- 标的：{marketContext.Symbol}");
+            sb.AppendLine($"- 市场：{marketContext.Market}");
+            sb.AppendLine($"- 最新价：{marketContext.Price:F4}");
+            sb.AppendLine($"- 涨跌幅：{marketContext.ChangePercent:F2}%");
+            sb.AppendLine($"- 行情时间(UTC)：{marketContext.QuoteTime:yyyy-MM-dd HH:mm:ss}");
+            sb.AppendLine($"- 距今时延：{marketContext.LagSeconds} 秒");
+            sb.AppendLine($"- 市场状态：{(marketContext.MarketOpen ? "开市" : "闭市")}");
+            sb.AppendLine($"- 新鲜度：{marketContext.Freshness}");
+            sb.AppendLine($"- 来源：{marketContext.Source}");
+            sb.AppendLine();
+            sb.AppendLine("要求：涉及价格的判断必须引用上述行情，不得虚构或替换为训练记忆中的历史价格。");
+            sb.AppendLine();
+        }
+        else if (!string.IsNullOrWhiteSpace(input.Symbol))
+        {
+            sb.AppendLine($"标的：{NormalizeSymbol(input.Symbol)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(input.Focus))
+        {
+            sb.AppendLine($"关注点：{input.Focus.Trim()}");
+        }
+
+        sb.AppendLine($"用户问题：{question}");
+        sb.AppendLine();
+        sb.AppendLine("请按“结论 / 依据 / 风险提示”结构回复。");
+        sb.AppendLine("注意：不构成投资建议。");
+        return sb.ToString();
+    }
+
+    private static bool IsRealtimeSensitiveQuestion(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            return false;
+        }
+
+        return RealtimeKeywords.Any(keyword => question.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IEnumerable<string> ExtractSymbolCandidatesFromQuestion(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            return [];
+        }
+
+        var candidates = new List<string>();
+        foreach (Match match in SymbolPattern.Matches(question.ToUpperInvariant()))
+        {
+            var token = match.Value.Trim();
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                continue;
+            }
+
+            if (token.All(char.IsLetter) && (token.Length <= 1 || TickerStopwords.Contains(token)))
+            {
+                continue;
+            }
+
+            candidates.Add(token);
+        }
+
+        return candidates
+            .Select(NormalizeSymbol)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+    }
+
+    private static IEnumerable<string> ExtractChineseKeywordCandidates(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question))
+        {
+            return [];
+        }
+
+        var rows = new List<string>();
+        var matches = Regex.Matches(question, @"[\u4e00-\u9fff]{2,18}");
+        foreach (Match match in matches)
+        {
+            var value = match.Value.Trim();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            var normalized = value;
+            foreach (var noise in ChineseNoiseWords)
+            {
+                normalized = normalized.Replace(noise, string.Empty, StringComparison.OrdinalIgnoreCase);
+            }
+
+            normalized = normalized.Trim();
+            if (normalized.Length is < 2 or > 10)
+            {
+                continue;
+            }
+
+            rows.Add(normalized);
+        }
+
+        return rows
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(6)
+            .ToList();
+    }
+
+    private static string DetermineFreshness(int lagSeconds, bool marketOpen)
+    {
+        if (!marketOpen)
+        {
+            return "delayed_close";
+        }
+
+        return lagSeconds <= RealtimeStaleThresholdSeconds ? "realtime" : "stale";
+    }
+
+    private static DateTime EnsureUtc(DateTime value)
+    {
+        return value.Kind switch
+        {
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+        };
+    }
+
+    private static string InferMarketFromSymbol(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized) || !normalized.Contains('.'))
+        {
+            return "US";
+        }
+
+        return normalized.Split('.').LastOrDefault()?.ToUpperInvariant() ?? "US";
+    }
+
+    private static string NormalizeSymbol(string symbol)
+    {
+        var normalized = (symbol ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        if (normalized.StartsWith("SH", StringComparison.OrdinalIgnoreCase)
+            && normalized.Length == 8
+            && normalized.Skip(2).All(char.IsDigit))
+        {
+            return $"{normalized[2..]}.SH";
+        }
+
+        if (normalized.StartsWith("SZ", StringComparison.OrdinalIgnoreCase)
+            && normalized.Length == 8
+            && normalized.Skip(2).All(char.IsDigit))
+        {
+            return $"{normalized[2..]}.SZ";
+        }
+
+        if (normalized.Contains('.'))
+        {
+            return normalized;
+        }
+
+        if (normalized.All(char.IsDigit) && normalized.Length == 6)
+        {
+            var market = normalized.StartsWith("6", StringComparison.Ordinal)
+                || normalized.StartsWith("9", StringComparison.Ordinal)
+                || normalized.StartsWith("5", StringComparison.Ordinal)
+                ? "SH"
+                : "SZ";
+            return $"{normalized}.{market}";
+        }
+
+        if (normalized.All(char.IsDigit) && normalized.Length == 5)
+        {
+            return $"{normalized}.HK";
+        }
+
+        return $"{normalized}.US";
+    }
+
+    private static bool SymbolEquals(string? left, string? right)
+    {
+        var normalizedLeft = NormalizeSymbol(left ?? string.Empty);
+        var normalizedRight = NormalizeSymbol(right ?? string.Empty);
+        if (normalizedLeft.Equals(normalizedRight, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var leftBase = normalizedLeft.Split('.').FirstOrDefault() ?? normalizedLeft;
+        var rightBase = normalizedRight.Split('.').FirstOrDefault() ?? normalizedRight;
+        return leftBase.Equals(rightBase, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<OpenAiRuntimeConfig> GetRuntimeConfigAsync(CancellationToken cancellationToken)

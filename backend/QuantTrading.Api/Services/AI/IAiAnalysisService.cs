@@ -62,6 +62,20 @@ public sealed class AiChatResult
     public string Model { get; init; } = string.Empty;
     public string Content { get; init; } = string.Empty;
     public DateTime GeneratedAt { get; init; } = DateTime.UtcNow;
+    public AiChatMarketContext? MarketContext { get; init; }
+}
+
+public sealed class AiChatMarketContext
+{
+    public string Symbol { get; init; } = string.Empty;
+    public string Market { get; init; } = string.Empty;
+    public decimal Price { get; init; }
+    public decimal ChangePercent { get; init; }
+    public DateTime QuoteTime { get; init; } = DateTime.UtcNow;
+    public int LagSeconds { get; init; }
+    public bool MarketOpen { get; init; }
+    public string Freshness { get; init; } = "stale";
+    public string Source { get; init; } = "longbridge";
 }
 
 public sealed class AiPromptOptimizeInput
