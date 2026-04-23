@@ -203,6 +203,28 @@ pnpm dev
    - `FRONTEND_URL`：可选，前端地址
 4. 部署后即可查看关注列表、行情和交易记录
 
+## 线上前端自动跟随本地后端
+
+如果你当前是“线上前端 + 本地后端（15000）”模式，可使用脚本自动保持可用：
+
+```bash
+chmod +x scripts/keep_frontend_online.sh
+./scripts/keep_frontend_online.sh
+```
+
+脚本会自动执行：
+
+1. 检查本地后端健康（`http://localhost:15000/health`）
+2. 创建 `trycloudflare` 公网隧道
+3. 更新 Vercel `BACKEND_API_BASE_URL` 与 `VITE_SIGNALR_BASE_URL`
+4. 自动触发前端生产部署
+5. 持续巡检，隧道失效后自动重建并重新同步
+
+注意：
+
+1. 脚本会把 `BACKEND_API_BASE_URL`/`VITE_SIGNALR_BASE_URL` 以 `no-sensitive` 方式写入 Vercel（因为这是公网隧道地址，本身可公开），这样可以避免“变量存在但线上函数读取为空”的问题。
+2. 这是“本地后端在线即线上可用”的方案。若需要彻底独立（本机离线仍可用），需把后端部署到常驻云主机。
+
 ## 免费数据库方案
 
 后端已支持 SQL Server 和 Postgres 双驱动。
