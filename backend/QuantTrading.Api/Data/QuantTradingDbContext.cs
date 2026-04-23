@@ -81,5 +81,64 @@ public class QuantTradingDbContext : DbContext
             new SystemConfig { Id = 12, Key = "Enabled", Category = "proxy", Description = "Enable Proxy", Value = "false" },
             new SystemConfig { Id = 13, Key = "Url", Category = "proxy", Description = "Proxy URL" }
         );
+
+        if (Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            ConfigurePostgresTextColumns(modelBuilder);
+        }
+    }
+
+    private static void ConfigurePostgresTextColumns(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Strategy>()
+            .Property(item => item.ConfigJson)
+            .HasColumnType("text");
+        modelBuilder.Entity<StrategyExecution>()
+            .Property(item => item.DetailsJson)
+            .HasColumnType("text");
+
+        modelBuilder.Entity<Backtest>()
+            .Property(item => item.EquityCurveJson)
+            .HasColumnType("text");
+        modelBuilder.Entity<Backtest>()
+            .Property(item => item.TradesJson)
+            .HasColumnType("text");
+        modelBuilder.Entity<Review>()
+            .Property(item => item.Content)
+            .HasColumnType("text");
+        modelBuilder.Entity<Review>()
+            .Property(item => item.TradesAnalysisJson)
+            .HasColumnType("text");
+        modelBuilder.Entity<Review>()
+            .Property(item => item.LessonsLearned)
+            .HasColumnType("text");
+        modelBuilder.Entity<Review>()
+            .Property(item => item.ImprovementPlans)
+            .HasColumnType("text");
+        modelBuilder.Entity<Review>()
+            .Property(item => item.Tags)
+            .HasColumnType("text");
+
+        modelBuilder.Entity<MonitorRule>()
+            .Property(item => item.SymbolsJson)
+            .HasColumnType("text");
+        modelBuilder.Entity<MonitorRule>()
+            .Property(item => item.ConditionsJson)
+            .HasColumnType("text");
+        modelBuilder.Entity<MonitorRule>()
+            .Property(item => item.NotifyChannelsJson)
+            .HasColumnType("text");
+        modelBuilder.Entity<MonitorAlert>()
+            .Property(item => item.Message)
+            .HasColumnType("text");
+        modelBuilder.Entity<MonitorAlert>()
+            .Property(item => item.DataJson)
+            .HasColumnType("text");
+        modelBuilder.Entity<SystemConfig>()
+            .Property(item => item.Value)
+            .HasColumnType("text");
+        modelBuilder.Entity<NotificationLog>()
+            .Property(item => item.Content)
+            .HasColumnType("text");
     }
 }
