@@ -398,6 +398,8 @@ const testing = ref({
 const modelLoadingByProvider = ref<Record<string, boolean>>({})
 const MASKED_VALUE = '******'
 const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1'
+const SETTINGS_BACKUP_KEY = 'qt-settings-backup-v1'
+const LEGACY_DEMO_STATE_KEY = 'qt-demo-state-v1'
 
 function createAiProvider(seed?: Partial<AiProviderConfig>, index = 0): AiProviderConfig {
   const id = String(seed?.id || `provider-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`).trim()
@@ -433,6 +435,64 @@ function normalizeOpenAiConfig(openAi: SystemConfig['openAi']): SystemConfig['op
     apiKey: active?.apiKey || '',
     baseUrl: active?.baseUrl || 'https://api.openai.com/v1',
     model: active?.model || 'gpt-5-mini'
+  }
+}
+
+function canUseStorage() {
+  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
+}
+
+function persistConfigBackup(snapshot: SystemConfig) {
+  if (!canUseStorage()) {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(SETTINGS_BACKUP_KEY, JSON.stringify(snapshot))
+  } catch (error) {
+    console.warn('Failed to persist settings backup:', error)
+  }
+}
+
+function readConfigBackup(): Partial<SystemConfig> | null {
+  if (!canUseStorage()) {
+    return null
+  }
+
+  const parseJson = (value: string | null) => {
+    if (!value) {
+      return null
+    }
+
+    try {
+      return JSON.parse(value)
+    } catch {
+      return null
+    }
+  }
+
+  const currentBackup = parseJson(window.localStorage.getItem(SETTINGS_BACKUP_KEY))
+  if (currentBackup && typeof currentBackup === 'object') {
+    return currentBackup as Partial<SystemConfig>
+  }
+
+  // 兼容旧版 demo 配置存储结构，避免迁移后“看起来丢配置”。
+  const legacyState = parseJson(window.localStorage.getItem(LEGACY_DEMO_STATE_KEY))
+  if (legacyState && typeof legacyState === 'object' && legacyState.config && typeof legacyState.config === 'object') {
+    return legacyState.config as Partial<SystemConfig>
+  }
+
+  return null
+}
+
+function applyConfigSnapshot(snapshot: Partial<SystemConfig>) {
+  config.value = {
+    ...config.value,
+    ...snapshot,
+    openAi: normalizeOpenAiConfig({
+      ...config.value.openAi,
+      ...((snapshot as SystemConfig)?.openAi || {})
+    } as SystemConfig['openAi'])
   }
 }
 
@@ -508,25 +568,32 @@ function getApiErrorMessage(error: unknown, fallback: string) {
 async function loadConfig() {
   try {
     const data = await configApi.get()
-    config.value = {
-      ...config.value,
-      ...data,
-      openAi: normalizeOpenAiConfig({
-        ...config.value.openAi,
-        ...(data?.openAi || {})
-      } as SystemConfig['openAi'])
-    }
-  } catch (error) {
+    applyConfigSnapshot(data || {})
+    persistConfigBackup(config.value)
+  } catch (error: any) {
     console.error('Failed to load config:', error)
+    const backup = readConfigBackup()
+    if (backup) {
+      applyConfigSnapshot(backup)
+      ElMessage.warning('后端配置服务暂不可用，已加载本地备份配置。')
+      return
+    }
+
+    const message = error?.response?.status
+      ? `配置服务不可用（${error.response.status}）`
+      : '配置服务不可用'
+    ElMessage.error(`${message}，且未找到本地备份。`)
   }
 }
 
 async function saveLongBridge() {
   try {
     await configApi.update({ longBridge: config.value.longBridge })
+    persistConfigBackup(config.value)
     ElMessage.success('长桥配置已保存')
   } catch {
-    ElMessage.error('保存失败')
+    persistConfigBackup(config.value)
+    ElMessage.warning('后端保存失败，已暂存到当前浏览器。')
   }
 }
 
@@ -559,8 +626,10 @@ async function testMcp() {
 async function saveProxy() {
   try {
     await configApi.update({ proxy: config.value.proxy })
+    persistConfigBackup(config.value)
     ElMessage.success('代理配置已保存')
   } catch {
+    persistConfigBackup(config.value)
     ElMessage.error('保存失败')
   }
 }
@@ -568,8 +637,10 @@ async function saveProxy() {
 async function saveEmail() {
   try {
     await configApi.update({ email: config.value.email })
+    persistConfigBackup(config.value)
     ElMessage.success('邮件配置已保存')
   } catch {
+    persistConfigBackup(config.value)
     ElMessage.error('保存失败')
   }
 }
@@ -589,8 +660,10 @@ async function testEmail() {
 async function saveFeishu() {
   try {
     await configApi.update({ feishu: config.value.feishu })
+    persistConfigBackup(config.value)
     ElMessage.success('飞书配置已保存')
   } catch {
+    persistConfigBackup(config.value)
     ElMessage.error('保存失败')
   }
 }
@@ -610,8 +683,10 @@ async function testFeishu() {
 async function saveWechat() {
   try {
     await configApi.update({ wechat: config.value.wechat })
+    persistConfigBackup(config.value)
     ElMessage.success('微信配置已保存')
   } catch {
+    persistConfigBackup(config.value)
     ElMessage.error('保存失败')
   }
 }
@@ -719,9 +794,11 @@ async function saveOpenAi() {
   try {
     syncOpenAiLegacyFields()
     await configApi.update({ openAi: config.value.openAi })
+    persistConfigBackup(config.value)
     ElMessage.success('OpenAI 配置已保存')
   } catch {
-    ElMessage.error('保存失败')
+    persistConfigBackup(config.value)
+    ElMessage.warning('后端保存失败，已暂存到当前浏览器。')
   }
 }
 
