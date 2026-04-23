@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: quanttrading-api
+    runtime: docker
+    region: singapore
+    dockerfilePath: ./Dockerfile.backend
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: Database__Provider
+        value: postgres
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quanttrading-db
+          property: connectionString
+      - key: LongBridge__BaseUrl
+        value: https://openapi.longbridge.com
+      - key: LongBridge__AppKey
+        sync: false
+      - key: LongBridge__AppSecret
+        sync: false
+      - key: LongBridge__AccessToken
+        sync: false
+      - key: OpenAI__Enabled
+        value: "true"
+      - key: OpenAI__ApiKey
+        sync: false
+      - key: OpenAI__BaseUrl
+        sync: false
+      - key: OpenAI__Model
+        sync: false
+
+databases:
+  - name: quanttrading-db
+    databaseName: quanttrading
+    user: quanttrading

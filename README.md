@@ -225,6 +225,41 @@ chmod +x scripts/keep_frontend_online.sh
 1. 脚本会把 `BACKEND_API_BASE_URL`/`VITE_SIGNALR_BASE_URL` 以 `no-sensitive` 方式写入 Vercel（因为这是公网隧道地址，本身可公开），这样可以避免“变量存在但线上函数读取为空”的问题。
 2. 这是“本地后端在线即线上可用”的方案。若需要彻底独立（本机离线仍可用），需把后端部署到常驻云主机。
 
+## 后端公网部署
+
+后端已提供公网容器部署配置：
+
+- `Dockerfile.backend`：面向 Railway / Render / Fly 等容器平台的后端镜像，支持平台注入的 `PORT`。
+- `railway.toml`：Railway 配置即代码，启用 `/health` 健康检查和失败重启。
+- `render.yaml`：Render Blueprint，包含 Web Service + Postgres。
+
+推荐环境变量：
+
+```env
+ASPNETCORE_ENVIRONMENT=Production
+Database__Provider=postgres
+DATABASE_URL=<托管 Postgres 连接串>
+LongBridge__BaseUrl=https://openapi.longbridge.com
+LongBridge__AppKey=<你的 App Key>
+LongBridge__AppSecret=<你的 App Secret>
+LongBridge__AccessToken=<你的 Access Token>
+OpenAI__Enabled=true
+OpenAI__ApiKey=<你的模型 API Key>
+OpenAI__BaseUrl=<模型 OpenAI 兼容地址>
+OpenAI__Model=<默认模型名称>
+```
+
+部署完成后，把 Vercel 前端的 `BACKEND_API_BASE_URL` 和 `VITE_SIGNALR_BASE_URL` 更新为公网后端域名，然后重新部署前端：
+
+```bash
+cd frontend
+vercel env rm BACKEND_API_BASE_URL production --yes
+vercel env add BACKEND_API_BASE_URL production --value "https://your-api.example.com" --no-sensitive --yes
+vercel env rm VITE_SIGNALR_BASE_URL production --yes
+vercel env add VITE_SIGNALR_BASE_URL production --value "https://your-api.example.com" --no-sensitive --yes
+vercel --prod --yes
+```
+
 ## 免费数据库方案
 
 后端已支持 SQL Server 和 Postgres 双驱动。

@@ -95,7 +95,13 @@ builder.Services.AddCors(options =>
 
 // Configure Database
 var databaseProvider = builder.Configuration["Database:Provider"]?.Trim().ToLowerInvariant();
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+var databaseUrl = builder.Configuration["DATABASE_URL"]
+    ?? builder.Configuration["POSTGRES_URL"]
+    ?? builder.Configuration["POSTGRESQL_URL"];
+var connectionString = ResolveDatabaseConnectionString(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        databaseProvider,
+        databaseUrl)
     ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is required.");
 
 builder.Services.AddDbContext<QuantTradingDbContext>(options =>
@@ -208,3 +214,52 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+
+static string? ResolveDatabaseConnectionString(string? configuredConnectionString, string? databaseProvider, string? databaseUrl)
+{
+    var wantsPostgres = string.Equals(databaseProvider, "postgres", StringComparison.OrdinalIgnoreCase)
+        || IsPostgresUrl(databaseUrl);
+    if (wantsPostgres && !string.IsNullOrWhiteSpace(databaseUrl))
+    {
+        return ConvertPostgresUrl(databaseUrl);
+    }
+
+    if (!string.IsNullOrWhiteSpace(configuredConnectionString))
+    {
+        return configuredConnectionString;
+    }
+
+    return string.IsNullOrWhiteSpace(databaseUrl) ? null : ConvertPostgresUrl(databaseUrl);
+}
+
+static bool IsPostgresUrl(string? value)
+{
+    return Uri.TryCreate(value, UriKind.Absolute, out var uri)
+        && uri.Scheme.StartsWith("postgres", StringComparison.OrdinalIgnoreCase);
+}
+
+static string ConvertPostgresUrl(string value)
+{
+    if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+        || !uri.Scheme.StartsWith("postgres", StringComparison.OrdinalIgnoreCase))
+    {
+        return value;
+    }
+
+    var userInfo = uri.UserInfo.Split(':', 2);
+    var username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : string.Empty;
+    var password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty;
+    var database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/'));
+    var port = uri.Port > 0 ? uri.Port : 5432;
+
+    return string.Join(';', new[]
+    {
+        $"Host={uri.Host}",
+        $"Port={port}",
+        $"Database={database}",
+        $"Username={username}",
+        $"Password={password}",
+        "SSL Mode=Require",
+        "Trust Server Certificate=true"
+    });
+}

@@ -1,0 +1,9 @@
+.git
+.vercel
+frontend/node_modules
+frontend/dist
+**/bin
+**/obj
+**/.DS_Store
+changes
+image
