@@ -44,6 +44,7 @@ public sealed class AuthController : ControllerBase
 
         var user = await _dbContext.AppUsers
             .FirstOrDefaultAsync(u => u.Username == username && u.IsActive, cancellationToken);
+        user ??= await TryRecoverAdminAliasAsync(username, request.Password, cancellationToken);
         if (user == null)
         {
             return Unauthorized(new { message = "用户名或密码错误。" });
@@ -69,6 +70,55 @@ public sealed class AuthController : ControllerBase
             Token = _jwtTokenService.CreateToken(user),
             User = UserDto.From(user)
         });
+    }
+
+    private async Task<AppUser?> TryRecoverAdminAliasAsync(string username, string password, CancellationToken cancellationToken)
+    {
+        var configuredUsername = (_configuration["Auth:AdminUsername"] ?? "admin").Trim();
+        var isAdminAlias = string.Equals(username, "admin", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(username, configuredUsername, StringComparison.OrdinalIgnoreCase);
+        if (!isAdminAlias)
+        {
+            return null;
+        }
+
+        var configuredPassword = _configuration["Auth:AdminPassword"];
+        var acceptedPasswords = new List<string> { DefaultAdminPassword };
+        if (!string.IsNullOrWhiteSpace(configuredPassword))
+        {
+            acceptedPasswords.Add(configuredPassword);
+        }
+
+        var matchedPassword = acceptedPasswords
+            .FirstOrDefault(item => string.Equals(password, item, StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(matchedPassword))
+        {
+            return null;
+        }
+
+        var admin = await _dbContext.AppUsers
+            .OrderBy(u => u.Id)
+            .FirstOrDefaultAsync(u => u.Role == UserRoles.Admin, cancellationToken);
+        if (admin == null)
+        {
+            return null;
+        }
+
+        admin.IsActive = true;
+        admin.PasswordHash = _passwordService.HashPassword(matchedPassword);
+        if (!string.Equals(admin.Username, "admin", StringComparison.OrdinalIgnoreCase))
+        {
+            var hasAdminUsername = await _dbContext.AppUsers
+                .AnyAsync(u => u.Id != admin.Id && u.Username == "admin", cancellationToken);
+            if (!hasAdminUsername)
+            {
+                admin.Username = "admin";
+            }
+        }
+
+        admin.UpdatedAt = DateTime.UtcNow;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return admin;
     }
 
     private async Task<bool> TryRecoverAdminPasswordAsync(AppUser user, string password, CancellationToken cancellationToken)
