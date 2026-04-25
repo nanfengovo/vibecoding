@@ -196,7 +196,8 @@ const currentRoute = computed(() => route.path)
 const currentTitle = computed(() => route.meta?.title || '')
 
 const menuRoutes = computed(() => {
-  const routes = router.options.routes[0]?.children || []
+  const rootRoute = router.options.routes.find((item) => Array.isArray(item.children) && item.children.length > 0)
+  const routes = rootRoute?.children || []
   return routes
     .filter(r => !r.meta?.hidden)
     .filter(r => !r.meta?.admin || authStore.isAdmin)
