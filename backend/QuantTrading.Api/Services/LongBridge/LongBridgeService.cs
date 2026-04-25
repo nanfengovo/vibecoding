@@ -370,6 +370,15 @@ public class LongBridgeService : ILongBridgeService
         }
 
         var upstreamMessage = ExtractErrorMessage(content);
+        if (IsExpectedQuoteProbeNotFound(response.StatusCode, path, upstreamMessage))
+        {
+            _logger.LogDebug(
+                "LongBridge quote REST probe not available: {StatusCode} path={Path}",
+                response.StatusCode,
+                path);
+            return new LongBridgeApiCallResult(false, null, null);
+        }
+
         _logger.LogError(
             "LongBridge API error: {StatusCode} path={Path} uri={Uri} content={Content}",
             response.StatusCode,
@@ -377,6 +386,25 @@ public class LongBridgeService : ILongBridgeService
             requestUri,
             content);
         return new LongBridgeApiCallResult(false, null, upstreamMessage);
+    }
+
+    private static bool IsExpectedQuoteProbeNotFound(HttpStatusCode statusCode, string path, string? message)
+    {
+        if (statusCode != HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+
+        if (!string.Equals(message, "api not found", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var normalizedPath = path.TrimStart('/');
+        return normalizedPath.StartsWith("v1/quote/realtime?", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith("v1/quote?", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith("quote/realtime?", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith("quote?", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildAuthorizationHeaderValue(string accessToken, string appSecret)
