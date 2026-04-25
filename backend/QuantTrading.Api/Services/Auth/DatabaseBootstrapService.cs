@@ -113,12 +113,19 @@ public sealed class DatabaseBootstrapService
             }
         }
 
-        if (admin.LastLoginAt is null && !_passwordService.VerifyPassword(configuredPassword, admin.PasswordHash))
+        if (!_passwordService.VerifyPassword(configuredPassword, admin.PasswordHash))
         {
             admin.PasswordHash = _passwordService.HashPassword(configuredPassword);
             admin.UpdatedAt = DateTime.UtcNow;
             changed = true;
             _logger.LogInformation("Updated admin credentials for user {Username} from configured Auth:AdminPassword.", configuredUsername);
+        }
+
+        if (!admin.IsActive)
+        {
+            admin.IsActive = true;
+            admin.UpdatedAt = DateTime.UtcNow;
+            changed = true;
         }
 
         if (changed)
