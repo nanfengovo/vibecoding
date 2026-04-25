@@ -32,7 +32,7 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - Auth__JwtSecret=${AUTH_JWT_SECRET:-QuantTrading-Development-Jwt-Secret-Change-Me-2026}
       - Auth__AdminUsername=${AUTH_ADMIN_USERNAME:-admin}
-      - Auth__AdminPassword=${AUTH_ADMIN_PASSWORD:-}
+      - Auth__AdminPassword=${AUTH_ADMIN_PASSWORD:-Admin@Test2026}
       - Database__Provider=${DB_PROVIDER:-sqlserver}
       - ConnectionStrings__DefaultConnection=${DB_CONNECTION:-Server=sqlserver;Database=QuantTrading;User Id=sa;Password=${DB_PASSWORD:-QuantTrading@2024};TrustServerCertificate=true}
       - LongBridge__AppKey=${LONGBRIDGE_APP_KEY}
@@ -64,7 +64,7 @@ services:
       dockerfile: Dockerfile
     container_name: quant-frontend
     ports:
-      - "${FRONTEND_PORT:-80}:80"
+      - "${FRONTEND_PORT:-18080}:80"
     depends_on:
       - backend
     restart: unless-stopped

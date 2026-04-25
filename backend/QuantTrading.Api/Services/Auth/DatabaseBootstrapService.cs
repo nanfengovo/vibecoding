@@ -52,16 +52,18 @@ public sealed class DatabaseBootstrapService
     {
         var configuredUsername = (_configuration["Auth:AdminUsername"] ?? "admin").Trim();
         var username = string.IsNullOrWhiteSpace(configuredUsername) ? "admin" : configuredUsername;
+        var configuredPassword = _configuration["Auth:AdminPassword"];
         var existingAdmin = await _dbContext.AppUsers
             .OrderBy(u => u.Id)
             .FirstOrDefaultAsync(u => u.Role == UserRoles.Admin, cancellationToken);
 
         if (existingAdmin != null)
         {
+            await SyncConfiguredAdminCredentialsAsync(existingAdmin, username, configuredPassword, cancellationToken);
             return existingAdmin;
         }
 
-        var password = _configuration["Auth:AdminPassword"];
+        var password = configuredPassword;
         if (string.IsNullOrWhiteSpace(password))
         {
             password = $"QT-{Guid.NewGuid():N}";
@@ -82,6 +84,44 @@ public sealed class DatabaseBootstrapService
         _dbContext.AppUsers.Add(admin);
         await _dbContext.SaveChangesAsync(cancellationToken);
         return admin;
+    }
+
+    private async Task SyncConfiguredAdminCredentialsAsync(
+        AppUser admin,
+        string configuredUsername,
+        string? configuredPassword,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(configuredPassword))
+        {
+            return;
+        }
+
+        var changed = false;
+        if (!string.Equals(admin.Username, configuredUsername, StringComparison.Ordinal))
+        {
+            var usernameTaken = await _dbContext.AppUsers
+                .AnyAsync(u => u.Id != admin.Id && u.Username == configuredUsername, cancellationToken);
+            if (!usernameTaken)
+            {
+                admin.Username = configuredUsername;
+                admin.UpdatedAt = DateTime.UtcNow;
+                changed = true;
+            }
+        }
+
+        if (!_passwordService.VerifyPassword(configuredPassword, admin.PasswordHash))
+        {
+            admin.PasswordHash = _passwordService.HashPassword(configuredPassword);
+            admin.UpdatedAt = DateTime.UtcNow;
+            changed = true;
+            _logger.LogInformation("Updated admin credentials for user {Username} from configured Auth:AdminPassword.", configuredUsername);
+        }
+
+        if (changed)
+        {
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
     }
 
     private async Task AssignExistingRowsAsync(int userId, CancellationToken cancellationToken)
