@@ -113,7 +113,7 @@ public sealed class DatabaseBootstrapService
             }
         }
 
-        if (!_passwordService.VerifyPassword(configuredPassword, admin.PasswordHash))
+        if (admin.LastLoginAt is null && !_passwordService.VerifyPassword(configuredPassword, admin.PasswordHash))
         {
             admin.PasswordHash = _passwordService.HashPassword(configuredPassword);
             admin.UpdatedAt = DateTime.UtcNow;

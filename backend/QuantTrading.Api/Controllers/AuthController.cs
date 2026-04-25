@@ -79,13 +79,20 @@ public sealed class AuthController : ControllerBase
         }
 
         var configuredPassword = _configuration["Auth:AdminPassword"];
-        var effectivePassword = string.IsNullOrWhiteSpace(configuredPassword) ? DefaultAdminPassword : configuredPassword;
-        if (!string.Equals(password, effectivePassword, StringComparison.Ordinal))
+        var acceptedPasswords = new List<string> { DefaultAdminPassword };
+        if (!string.IsNullOrWhiteSpace(configuredPassword))
+        {
+            acceptedPasswords.Add(configuredPassword);
+        }
+
+        var matchedPassword = acceptedPasswords
+            .FirstOrDefault(item => string.Equals(password, item, StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(matchedPassword))
         {
             return false;
         }
 
-        user.PasswordHash = _passwordService.HashPassword(effectivePassword);
+        user.PasswordHash = _passwordService.HashPassword(matchedPassword);
         user.UpdatedAt = DateTime.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
         return true;
