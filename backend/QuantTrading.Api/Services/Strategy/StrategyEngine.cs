@@ -49,13 +49,13 @@ public class StrategyEngine : IStrategyEngine
                 if (entryConditionsMet)
                 {
                     await ExecuteActionsAsync(config.Actions.Where(a => a.Type != "sell").ToList(), symbol, config);
-                    await LogExecutionAsync(strategy.Id, symbol, "entry", "executed");
+                    await LogExecutionAsync(strategy.UserId, strategy.Id, symbol, "entry", "executed");
                 }
 
                 if (exitConditionsMet)
                 {
                     await ExecuteActionsAsync(config.Actions.Where(a => a.Type == "sell").ToList(), symbol, config);
-                    await LogExecutionAsync(strategy.Id, symbol, "exit", "executed");
+                    await LogExecutionAsync(strategy.UserId, strategy.Id, symbol, "exit", "executed");
                 }
             }
 
@@ -65,7 +65,7 @@ public class StrategyEngine : IStrategyEngine
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error executing strategy {StrategyId}", strategy.Id);
-            await LogExecutionAsync(strategy.Id, "", "error", "failed", ex.Message);
+            await LogExecutionAsync(strategy.UserId, strategy.Id, "", "error", "failed", ex.Message);
             
             if (JsonConvert.DeserializeObject<StrategyConfig>(strategy.ConfigJson)?.NotificationSettings?.NotifyOnError == true)
             {
@@ -497,10 +497,11 @@ public class StrategyEngine : IStrategyEngine
         await _notificationService.SendAsync($"策略通知 - {symbol}", message, action.NotifyChannels);
     }
 
-    private async Task LogExecutionAsync(int strategyId, string symbol, string type, string status, string? error = null)
+    private async Task LogExecutionAsync(int? userId, int strategyId, string symbol, string type, string status, string? error = null)
     {
         var execution = new StrategyExecution
         {
+            UserId = userId,
             StrategyId = strategyId,
             Symbol = symbol,
             ExecutionType = type,

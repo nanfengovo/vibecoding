@@ -204,7 +204,8 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
                 Model = "longbridge-realtime",
                 Content = BuildStrictRealtimeAnswer(question, marketContext, stockDisplayName),
                 GeneratedAt = DateTime.UtcNow,
-                MarketContext = marketContext
+                MarketContext = marketContext,
+                References = input.KnowledgeContext.ToList()
             };
         }
 
@@ -221,7 +222,8 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
                         stockDisplayName,
                         "AI 模型未启用，已返回严格实时行情结果。"),
                     GeneratedAt = DateTime.UtcNow,
-                    MarketContext = marketContext
+                    MarketContext = marketContext,
+                    References = input.KnowledgeContext.ToList()
                 };
             }
 
@@ -242,7 +244,8 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
                         stockDisplayName,
                         $"模型源“{provider.Name}”未配置 API Key，已返回严格实时行情结果。"),
                     GeneratedAt = DateTime.UtcNow,
-                    MarketContext = marketContext
+                    MarketContext = marketContext,
+                    References = input.KnowledgeContext.ToList()
                 };
             }
 
@@ -271,7 +274,8 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
                     Model = "longbridge-realtime-fallback",
                     Content = BuildStrictRealtimeAnswer(question, marketContext, stockDisplayName, error),
                     GeneratedAt = DateTime.UtcNow,
-                    MarketContext = marketContext
+                    MarketContext = marketContext,
+                    References = input.KnowledgeContext.ToList()
                 };
             }
 
@@ -286,7 +290,8 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
                 : modelUsed,
             Content = content.Trim(),
             GeneratedAt = DateTime.UtcNow,
-            MarketContext = marketContext
+            MarketContext = marketContext,
+            References = input.KnowledgeContext.ToList()
         };
     }
 
@@ -930,6 +935,45 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             && !string.IsNullOrWhiteSpace(skillPrompt))
         {
             sb.AppendLine(skillPrompt);
+            sb.AppendLine();
+        }
+
+        if (input.MemoryContext.Count > 0)
+        {
+            sb.AppendLine("用户长期记忆（仅用于个性化，不得泄露）：");
+            foreach (var memory in input.MemoryContext.Take(8))
+            {
+                sb.AppendLine($"- {memory}");
+            }
+            sb.AppendLine();
+        }
+
+        if (input.ConversationContext.Count > 0)
+        {
+            sb.AppendLine("最近会话上下文：");
+            foreach (var message in input.ConversationContext.TakeLast(12))
+            {
+                sb.AppendLine($"- {message}");
+            }
+            sb.AppendLine();
+        }
+
+        if (input.KnowledgeContext.Count > 0)
+        {
+            sb.AppendLine("知识库检索片段（回答相关问题时优先引用）：");
+            var index = 1;
+            foreach (var reference in input.KnowledgeContext.Take(8))
+            {
+                sb.AppendLine($"[{index}] {reference.Title}");
+                if (!string.IsNullOrWhiteSpace(reference.SourceUrl))
+                {
+                    sb.AppendLine($"来源：{reference.SourceUrl}");
+                }
+                sb.AppendLine(reference.Snippet);
+                sb.AppendLine();
+                index++;
+            }
+            sb.AppendLine("若使用知识库片段，请在回答末尾列出“引用”。");
             sb.AppendLine();
         }
 

@@ -127,6 +127,21 @@
               <div :class="['connection-indicator', { connected: isConnected }]" />
             </div>
           </el-tooltip>
+
+          <el-dropdown trigger="click" @command="handleUserCommand">
+            <el-button class="user-button">
+              <el-icon><UserFilled /></el-icon>
+              <span class="user-name">{{ authUserName }}</span>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item disabled>
+                  {{ authStore.user?.role === 'admin' ? '管理员' : '普通用户' }}
+                </el-dropdown-item>
+                <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -145,8 +160,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Search, Bell, WarningFilled, SuccessFilled, InfoFilled, Moon, Sunny, Menu } from '@element-plus/icons-vue'
+import { Search, Bell, WarningFilled, SuccessFilled, InfoFilled, Moon, Sunny, Menu, UserFilled } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { stockApi } from '@/api'
 import signalRService from '@/api/signalr'
 import dayjs from 'dayjs'
@@ -159,6 +175,7 @@ dayjs.locale('zh-cn')
 const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 
 const searchQuery = ref('')
 const isConnected = ref(false)
@@ -182,6 +199,7 @@ const menuRoutes = computed(() => {
   const routes = router.options.routes[0]?.children || []
   return routes
     .filter(r => !r.meta?.hidden)
+    .filter(r => !r.meta?.admin || authStore.isAdmin)
     .map((r) => ({
       ...r,
       fullPath: r.path.startsWith('/') ? r.path : `/${r.path}`
@@ -191,6 +209,7 @@ const menuRoutes = computed(() => {
 const connectionStatus = computed(() => 
   isConnected.value ? '实时连接正常' : '实时连接断开'
 )
+const authUserName = computed(() => authStore.user?.displayName || authStore.user?.username || '用户')
 
 function toggleSidebar() {
   appStore.toggleSidebar()
@@ -234,6 +253,13 @@ function handleSelectStock(item: any) {
 
 function clearNotifications() {
   appStore.clearNotifications()
+}
+
+async function handleUserCommand(command: string) {
+  if (command === 'logout') {
+    authStore.logout()
+    await router.replace('/login')
+  }
 }
 
 function getNotificationIcon(type: string) {
@@ -496,6 +522,19 @@ onUnmounted(() => {
   justify-content: center;
 }
 
+.user-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 150px;
+}
+
+.user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .main-content {
   background: var(--qt-bg);
   padding: 24px;
@@ -584,6 +623,11 @@ onUnmounted(() => {
 
   .connection-wrapper {
     display: none;
+  }
+
+  .user-button {
+    order: 4;
+    max-width: 120px;
   }
 
   :deep(.el-breadcrumb__item:last-child .el-breadcrumb__inner) {

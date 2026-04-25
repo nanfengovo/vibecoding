@@ -7,6 +7,8 @@ public class Backtest
 {
     [Key]
     public int Id { get; set; }
+
+    public int? UserId { get; set; }
     
     public int StrategyId { get; set; }
     
@@ -104,6 +106,8 @@ public class Review
 {
     [Key]
     public int Id { get; set; }
+
+    public int? UserId { get; set; }
     
     [Required]
     [StringLength(100)]

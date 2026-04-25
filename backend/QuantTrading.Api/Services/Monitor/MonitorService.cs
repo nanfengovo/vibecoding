@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using QuantTrading.Api.Data;
 using QuantTrading.Api.Models;
+using QuantTrading.Api.Services.Auth;
 using QuantTrading.Api.Services.LongBridge;
 using QuantTrading.Api.Services.Notification;
 using QuantTrading.Api.Services.Realtime;
@@ -12,6 +13,7 @@ namespace QuantTrading.Api.Services.Monitor;
 public class MonitorService : IMonitorService
 {
     private readonly QuantTradingDbContext _dbContext;
+    private readonly ICurrentUserService _currentUser;
     private readonly ILongBridgeService _longBridgeService;
     private readonly IStrategyEngine _strategyEngine;
     private readonly INotificationService _notificationService;
@@ -20,6 +22,7 @@ public class MonitorService : IMonitorService
 
     public MonitorService(
         QuantTradingDbContext dbContext,
+        ICurrentUserService currentUser,
         ILongBridgeService longBridgeService,
         IStrategyEngine strategyEngine,
         INotificationService notificationService,
@@ -27,6 +30,7 @@ public class MonitorService : IMonitorService
         ILogger<MonitorService> logger)
     {
         _dbContext = dbContext;
+        _currentUser = currentUser;
         _longBridgeService = longBridgeService;
         _strategyEngine = strategyEngine;
         _notificationService = notificationService;
@@ -36,18 +40,22 @@ public class MonitorService : IMonitorService
 
     public async Task<List<MonitorRule>> GetAllRulesAsync()
     {
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
         return await _dbContext.MonitorRules
+            .Where(r => r.UserId == userId)
             .OrderByDescending(r => r.UpdatedAt)
             .ToListAsync();
     }
 
     public async Task<MonitorRule?> GetRuleByIdAsync(int id)
     {
-        return await _dbContext.MonitorRules.FindAsync(id);
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        return await _dbContext.MonitorRules.FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
     }
 
     public async Task<MonitorRule> CreateRuleAsync(MonitorRule rule)
     {
+        rule.UserId = await _currentUser.GetEffectiveUserIdAsync();
         rule.CreatedAt = DateTime.UtcNow;
         rule.UpdatedAt = DateTime.UtcNow;
         
@@ -60,7 +68,8 @@ public class MonitorService : IMonitorService
 
     public async Task<MonitorRule?> UpdateRuleAsync(int id, MonitorRule rule)
     {
-        var existing = await _dbContext.MonitorRules.FindAsync(id);
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var existing = await _dbContext.MonitorRules.FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
         if (existing == null)
             return null;
         
@@ -81,7 +90,8 @@ public class MonitorService : IMonitorService
 
     public async Task<bool> DeleteRuleAsync(int id)
     {
-        var rule = await _dbContext.MonitorRules.FindAsync(id);
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var rule = await _dbContext.MonitorRules.FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
         if (rule == null)
             return false;
         
@@ -94,7 +104,8 @@ public class MonitorService : IMonitorService
 
     public async Task<bool> ToggleRuleAsync(int id)
     {
-        var rule = await _dbContext.MonitorRules.FindAsync(id);
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var rule = await _dbContext.MonitorRules.FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
         if (rule == null)
             return false;
         
@@ -158,6 +169,7 @@ public class MonitorService : IMonitorService
                 // Create alert
                 var alert = new MonitorAlert
                 {
+                    UserId = rule.UserId,
                     MonitorRuleId = rule.Id,
                     Symbol = symbol,
                     AlertType = rule.Name,
@@ -283,7 +295,8 @@ public class MonitorService : IMonitorService
 
     public async Task<List<MonitorAlert>> GetAlertsAsync(int? ruleId = null, bool? unreadOnly = null, int limit = 50)
     {
-        var query = _dbContext.MonitorAlerts.AsQueryable();
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var query = _dbContext.MonitorAlerts.Where(a => a.UserId == userId);
         
         if (ruleId.HasValue)
             query = query.Where(a => a.MonitorRuleId == ruleId.Value);
@@ -299,7 +312,8 @@ public class MonitorService : IMonitorService
 
     public async Task<bool> MarkAlertReadAsync(long alertId)
     {
-        var alert = await _dbContext.MonitorAlerts.FindAsync(alertId);
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var alert = await _dbContext.MonitorAlerts.FirstOrDefaultAsync(a => a.Id == alertId && a.UserId == userId);
         if (alert == null)
             return false;
         
@@ -310,8 +324,9 @@ public class MonitorService : IMonitorService
 
     public async Task<bool> MarkAllAlertsReadAsync()
     {
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
         await _dbContext.MonitorAlerts
-            .Where(a => !a.IsRead)
+            .Where(a => a.UserId == userId && !a.IsRead)
             .ExecuteUpdateAsync(a => a.SetProperty(x => x.IsRead, true));
         
         return true;

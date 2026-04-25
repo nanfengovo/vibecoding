@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using QuantTrading.Api.Data;
 using QuantTrading.Api.Models;
+using QuantTrading.Api.Services.Auth;
 using QuantTrading.Api.Services.LongBridge;
 using QuantTrading.Api.Services.Realtime;
 
@@ -9,17 +10,20 @@ namespace QuantTrading.Api.Services.Monitor;
 public class WatchlistService : IWatchlistService
 {
     private readonly QuantTradingDbContext _dbContext;
+    private readonly ICurrentUserService _currentUser;
     private readonly ILongBridgeService _longBridgeService;
     private readonly IRealtimePushService _realtimePushService;
     private readonly ILogger<WatchlistService> _logger;
 
     public WatchlistService(
         QuantTradingDbContext dbContext,
+        ICurrentUserService currentUser,
         ILongBridgeService longBridgeService,
         IRealtimePushService realtimePushService,
         ILogger<WatchlistService> logger)
     {
         _dbContext = dbContext;
+        _currentUser = currentUser;
         _longBridgeService = longBridgeService;
         _realtimePushService = realtimePushService;
         _logger = logger;
@@ -27,12 +31,45 @@ public class WatchlistService : IWatchlistService
 
     public async Task<List<Stock>> GetWatchlistAsync()
     {
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        await EnsureLegacyWatchlistMigratedAsync(userId);
+
+        var watchItems = await _dbContext.UserWatchlistItems
+            .Where(item => item.UserId == userId)
+            .OrderBy(item => item.Symbol)
+            .ToListAsync();
+
+        var symbols = watchItems.Select(item => item.Symbol).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var rows = await _dbContext.Stocks
-            .Where(s => s.IsWatched)
-            .OrderBy(s => s.Symbol)
+            .AsNoTracking()
+            .Where(s => symbols.Contains(s.Symbol))
             .ToListAsync();
 
         var changed = false;
+        foreach (var watchItem in watchItems)
+        {
+            if (rows.Any(stock => SymbolEquals(stock.Symbol, watchItem.Symbol)))
+            {
+                continue;
+            }
+
+            try
+            {
+                var latest = await _longBridgeService.GetStockInfoAsync(watchItem.Symbol);
+                if (latest != null && HasValidMarketData(latest))
+                {
+                    latest.Currency = ResolveCurrencyCode(latest.Symbol, latest.Market);
+                    _dbContext.Stocks.Add(latest);
+                    rows.Add(latest);
+                    changed = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to hydrate watchlist stock {Symbol}", watchItem.Symbol);
+            }
+        }
+
         foreach (var item in rows.Where(s => IsPoorDisplayName(s.Name, s.Symbol)).ToList())
         {
             try
@@ -46,12 +83,22 @@ public class WatchlistService : IWatchlistService
                 if (!string.IsNullOrWhiteSpace(latest.Name) && !string.Equals(item.Name, latest.Name, StringComparison.Ordinal))
                 {
                     item.Name = latest.Name;
+                    var tracked = await _dbContext.Stocks.FirstOrDefaultAsync(stock => stock.Symbol == item.Symbol);
+                    if (tracked != null)
+                    {
+                        tracked.Name = latest.Name;
+                    }
                     changed = true;
                 }
 
                 if (!string.IsNullOrWhiteSpace(latest.Market) && !string.Equals(item.Market, latest.Market, StringComparison.OrdinalIgnoreCase))
                 {
                     item.Market = latest.Market;
+                    var tracked = await _dbContext.Stocks.FirstOrDefaultAsync(stock => stock.Symbol == item.Symbol);
+                    if (tracked != null)
+                    {
+                        tracked.Market = latest.Market;
+                    }
                     changed = true;
                 }
             }
@@ -73,7 +120,20 @@ public class WatchlistService : IWatchlistService
             item.Currency = ResolveCurrencyCode(item.Symbol, item.Market);
         }
 
-        return rows;
+        return watchItems
+            .Select(item =>
+            {
+                var stock = rows.FirstOrDefault(row => SymbolEquals(row.Symbol, item.Symbol));
+                if (stock == null)
+                {
+                    return null;
+                }
+
+                return ToWatchlistStock(stock, item);
+            })
+            .Where(item => item != null)
+            .Cast<Stock>()
+            .ToList();
     }
 
     public async Task<Stock?> AddToWatchlistAsync(string symbol, string? notes = null)
@@ -97,6 +157,28 @@ public class WatchlistService : IWatchlistService
             $"{baseSymbol}.SG"
         };
 
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var existingWatchItem = await _dbContext.UserWatchlistItems
+            .FirstOrDefaultAsync(item => item.UserId == userId && symbolCandidates.Contains(item.Symbol));
+        if (existingWatchItem != null)
+        {
+            if (!string.IsNullOrWhiteSpace(notes))
+            {
+                existingWatchItem.Notes = notes.Trim();
+                existingWatchItem.UpdatedAt = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
+            }
+
+            var watchedStock = await _dbContext.Stocks.FirstOrDefaultAsync(s => s.Symbol == existingWatchItem.Symbol)
+                ?? await _longBridgeService.GetStockInfoAsync(existingWatchItem.Symbol);
+            if (watchedStock == null || !HasValidMarketData(watchedStock))
+            {
+                return null;
+            }
+
+            return ToWatchlistStock(watchedStock, existingWatchItem);
+        }
+
         var existing = await _dbContext.Stocks
             .FirstOrDefaultAsync(s => symbolCandidates.Contains(s.Symbol));
         
@@ -115,13 +197,23 @@ public class WatchlistService : IWatchlistService
 
             existing.IsWatched = true;
             existing.Currency = ResolveCurrencyCode(existing.Symbol, existing.Market);
-            if (!string.IsNullOrWhiteSpace(notes))
+            var watchItem = new UserWatchlistItem
             {
-                existing.Notes = notes.Trim();
+                UserId = userId,
+                Symbol = existing.Symbol,
+                Notes = string.IsNullOrWhiteSpace(notes) ? existing.Notes ?? string.Empty : notes.Trim(),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            _dbContext.UserWatchlistItems.Add(watchItem);
+
+            if (!string.IsNullOrWhiteSpace(watchItem.Notes))
+            {
+                existing.Notes = watchItem.Notes;
             }
 
             await _dbContext.SaveChangesAsync();
-            return existing;
+            return ToWatchlistStock(existing, watchItem);
         }
         
         // 优先使用搜索结果校验；若 security list 不完整，则回退到直接按代码拉取详情。
@@ -146,35 +238,55 @@ public class WatchlistService : IWatchlistService
         stockInfo.Notes = string.IsNullOrWhiteSpace(notes) ? stockInfo.Notes : notes.Trim();
 
         _dbContext.Stocks.Add(stockInfo);
+        var createdWatchItem = new UserWatchlistItem
+        {
+            UserId = userId,
+            Symbol = stockInfo.Symbol,
+            Notes = stockInfo.Notes ?? string.Empty,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+        _dbContext.UserWatchlistItems.Add(createdWatchItem);
         await _dbContext.SaveChangesAsync();
         
         _logger.LogInformation("Added to watchlist: {Symbol}", normalizedSymbol);
-        return stockInfo;
+        return ToWatchlistStock(stockInfo, createdWatchItem);
     }
 
     public async Task<bool> RemoveFromWatchlistAsync(int id)
     {
-        var stock = await _dbContext.Stocks.FindAsync(id);
-        if (stock == null)
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var item = await _dbContext.UserWatchlistItems
+            .FirstOrDefaultAsync(row => row.Id == id && row.UserId == userId);
+        if (item == null)
             return false;
         
-        stock.IsWatched = false;
+        _dbContext.UserWatchlistItems.Remove(item);
         await _dbContext.SaveChangesAsync();
         
-        _logger.LogInformation("Removed from watchlist: {Symbol}", stock.Symbol);
+        _logger.LogInformation("Removed from watchlist: {Symbol}", item.Symbol);
         return true;
     }
 
     public async Task<Stock?> UpdateStockNotesAsync(int id, string notes)
     {
-        var stock = await _dbContext.Stocks.FindAsync(id);
-        if (stock == null)
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var item = await _dbContext.UserWatchlistItems
+            .FirstOrDefaultAsync(row => row.Id == id && row.UserId == userId);
+        if (item == null)
             return null;
         
-        stock.Notes = notes;
+        item.Notes = notes;
+        item.UpdatedAt = DateTime.UtcNow;
         await _dbContext.SaveChangesAsync();
-        
-        return stock;
+
+        var stock = await _dbContext.Stocks.FirstOrDefaultAsync(row => row.Symbol == item.Symbol);
+        if (stock != null)
+        {
+            return ToWatchlistStock(stock, item);
+        }
+
+        return null;
     }
 
     public async Task RefreshWatchlistAsync()
@@ -253,6 +365,68 @@ public class WatchlistService : IWatchlistService
         
         await _dbContext.SaveChangesAsync();
         _logger.LogInformation("Refreshed watchlist: {Count} stocks", watchlist.Count);
+    }
+
+    private async Task EnsureLegacyWatchlistMigratedAsync(int userId)
+    {
+        var hasUserItems = await _dbContext.UserWatchlistItems.AnyAsync(item => item.UserId == userId);
+        if (hasUserItems)
+        {
+            return;
+        }
+
+        var legacyRows = await _dbContext.Stocks
+            .Where(s => s.IsWatched)
+            .OrderBy(s => s.Symbol)
+            .ToListAsync();
+        if (legacyRows.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var stock in legacyRows)
+        {
+            _dbContext.UserWatchlistItems.Add(new UserWatchlistItem
+            {
+                UserId = userId,
+                Symbol = stock.Symbol,
+                Notes = stock.Notes ?? string.Empty,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            });
+        }
+
+        await _dbContext.SaveChangesAsync();
+    }
+
+    private static Stock ToWatchlistStock(Stock stock, UserWatchlistItem item)
+    {
+        return new Stock
+        {
+            Id = item.Id,
+            Symbol = stock.Symbol,
+            Name = stock.Name,
+            Market = stock.Market,
+            Currency = ResolveCurrencyCode(stock.Symbol, stock.Market),
+            CurrentPrice = stock.CurrentPrice,
+            PreviousClose = stock.PreviousClose,
+            Open = stock.Open,
+            High = stock.High,
+            Low = stock.Low,
+            Volume = stock.Volume,
+            Change = stock.Change,
+            ChangePercent = stock.ChangePercent,
+            LastUpdated = stock.LastUpdated,
+            IsWatched = true,
+            Notes = item.Notes,
+            MarketCap = stock.MarketCap,
+            High52Week = stock.High52Week,
+            Low52Week = stock.Low52Week,
+            AvgVolume = stock.AvgVolume,
+            Pe = stock.Pe,
+            Eps = stock.Eps,
+            Dividend = stock.Dividend
+        };
     }
 
     private static string ResolveCurrencyCode(string? symbol, string? market)

@@ -1,7 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const routes: RouteRecordRaw[] = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login.vue'),
+    meta: { public: true, title: '登录' }
+  },
   {
     path: '/',
     component: () => import('@/layouts/MainLayout.vue'),
@@ -68,6 +75,18 @@ const routes: RouteRecordRaw[] = [
         meta: { title: 'AI Chat', icon: 'ChatDotRound' }
       },
       {
+        path: 'crawler',
+        name: 'Crawler',
+        component: () => import('@/views/Crawler.vue'),
+        meta: { title: '信息采集', icon: 'Connection' }
+      },
+      {
+        path: 'knowledge',
+        name: 'KnowledgeBase',
+        component: () => import('@/views/KnowledgeBase.vue'),
+        meta: { title: '知识库', icon: 'Collection' }
+      },
+      {
         path: 'lowcode',
         name: 'LowCode',
         component: () => import('@/views/LowCodeWorkbench.vue'),
@@ -77,7 +96,13 @@ const routes: RouteRecordRaw[] = [
         path: 'settings',
         name: 'Settings',
         component: () => import('@/views/Settings.vue'),
-        meta: { title: '系统设置', icon: 'Tools' }
+        meta: { title: '系统设置', icon: 'Tools', admin: true }
+      },
+      {
+        path: 'users',
+        name: 'Users',
+        component: () => import('@/views/Users.vue'),
+        meta: { title: '用户管理', icon: 'User', admin: true }
       }
     ]
   }
@@ -86,6 +111,35 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach(async (to) => {
+  const auth = useAuthStore()
+  if (to.meta.public) {
+    if (to.path === '/login' && auth.isAuthenticated) {
+      return '/dashboard'
+    }
+    return true
+  }
+
+  if (!auth.token) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+
+  if (!auth.user) {
+    try {
+      await auth.refreshUser()
+    } catch {
+      auth.logout()
+      return { path: '/login', query: { redirect: to.fullPath } }
+    }
+  }
+
+  if (to.meta.admin && !auth.isAdmin) {
+    return '/dashboard'
+  }
+
+  return true
 })
 
 export default router

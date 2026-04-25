@@ -16,7 +16,17 @@ import type {
   SystemConfig,
   ReviewRecord,
   PagedResult,
-  StockAnalysisResult
+  StockAnalysisResult,
+  AuthResponse,
+  AuthUser,
+  AiChatSessionSummary,
+  AiChatSessionDetail,
+  AiMemoryRecord,
+  CrawlerSource,
+  CrawlerJobRecord,
+  CrawlerDocument,
+  KnowledgeBase,
+  KnowledgeDocument
 } from '@/types'
 import { announceDemoMode, demoApi, shouldUseDemoApi } from '@/api/demo'
 
@@ -47,6 +57,19 @@ const api: AxiosInstance = axios.create({
   headers: {
     'Content-Type': 'application/json'
   }
+})
+
+export const AUTH_TOKEN_KEY = 'qt-auth-token'
+export const AUTH_USER_KEY = 'qt-auth-user'
+
+api.interceptors.request.use((config) => {
+  if (typeof localStorage !== 'undefined') {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY)
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+  }
+  return config
 })
 
 function parseStrategyConfig(configSource: any) {
@@ -148,11 +171,27 @@ function normalizeWatchlistRow(raw: any): WatchlistItem {
 api.interceptors.response.use(
   (response: AxiosResponse) => response.data,
   (error) => {
+    if (error.response?.status === 401 && typeof localStorage !== 'undefined') {
+      localStorage.removeItem(AUTH_TOKEN_KEY)
+      localStorage.removeItem(AUTH_USER_KEY)
+      if (!window.location.pathname.includes('/login')) {
+        window.location.href = '/login'
+      }
+    }
     const message = error.response?.data?.message || '请求失败'
     console.error('API Error:', message)
     return Promise.reject(error)
   }
 )
+
+export const authApi = {
+  login: (payload: { username: string; password: string }) =>
+    api.post<any, AuthResponse>('/auth/login', payload),
+  me: () => api.get<any, AuthUser>('/auth/me'),
+  listUsers: () => api.get<any, AuthUser[]>('/users'),
+  createUser: (payload: { username: string; displayName?: string; password: string; role?: string }) =>
+    api.post<any, AuthUser>('/users', payload)
+}
 
 // 股票API
 export const stockApi = {
@@ -558,11 +597,35 @@ export const aiApi = {
       skillId?: string
       providerId?: string
       model?: string
+      sessionId?: number
+      knowledgeBaseId?: number
+      useMemory?: boolean
     }
   ) =>
     DEMO_MODE
       ? demoApi.aiApi.chat(payload)
       : api.post<any, AiChatResult>('/ai/chat', payload),
+
+  listSessions: () =>
+    DEMO_MODE ? Promise.resolve([] as AiChatSessionSummary[]) : api.get<any, AiChatSessionSummary[]>('/ai/sessions'),
+
+  getSession: (id: number) =>
+    api.get<any, AiChatSessionDetail>(`/ai/sessions/${id}`),
+
+  createSession: (payload: { title?: string; symbol?: string; skillId?: string; providerId?: string; model?: string }) =>
+    api.post<any, AiChatSessionSummary>('/ai/sessions', payload),
+
+  deleteSession: (id: number) =>
+    api.delete(`/ai/sessions/${id}`),
+
+  listMemories: () =>
+    api.get<any, AiMemoryRecord[]>('/ai/memories'),
+
+  createMemory: (payload: Partial<AiMemoryRecord>) =>
+    api.post<any, AiMemoryRecord>('/ai/memories', payload),
+
+  deleteMemory: (id: number) =>
+    api.delete(`/ai/memories/${id}`),
 
   optimizePrompt: (
     payload: {
@@ -594,6 +657,33 @@ export const aiApi = {
         fetchedAt: new Date().toISOString()
       } as AiModelsResult)
       : api.post<any, AiModelsResult>('/ai/models', payload ?? {})
+}
+
+export const crawlerApi = {
+  listSources: () => api.get<any, CrawlerSource[]>('/crawler/sources'),
+  createSource: (payload: Partial<CrawlerSource>) => api.post<any, CrawlerSource>('/crawler/sources', payload),
+  updateSource: (id: number, payload: Partial<CrawlerSource>) => api.put<any, CrawlerSource>(`/crawler/sources/${id}`, payload),
+  deleteSource: (id: number) => api.delete(`/crawler/sources/${id}`),
+  runSource: (id: number) => api.post<any, CrawlerJobRecord>(`/crawler/sources/${id}/run`),
+  listDocuments: (params?: { sourceId?: number; symbol?: string }) =>
+    api.get<any, CrawlerDocument[]>('/crawler/documents', { params })
+}
+
+export const knowledgeApi = {
+  list: () => api.get<any, KnowledgeBase[]>('/knowledge-bases'),
+  create: (payload: { name: string; description?: string }) => api.post<any, KnowledgeBase>('/knowledge-bases', payload),
+  update: (id: number, payload: { name: string; description?: string }) => api.put<any, KnowledgeBase>(`/knowledge-bases/${id}`, payload),
+  delete: (id: number) => api.delete(`/knowledge-bases/${id}`),
+  listDocuments: (id: number) => api.get<any, KnowledgeDocument[]>(`/knowledge-bases/${id}/documents`),
+  getDocument: (id: number, documentId: number) => api.get<any, KnowledgeDocument>(`/knowledge-bases/${id}/documents/${documentId}`),
+  importMarkdown: (id: number, payload: { title: string; markdown: string; sourceUrl?: string; sourceType?: string }) =>
+    api.post<any, KnowledgeDocument>(`/knowledge-bases/${id}/documents/import-markdown`, payload),
+  importCrawlerDocument: (id: number, crawlerDocumentId: number) =>
+    api.post<any, KnowledgeDocument>(`/knowledge-bases/${id}/documents/import-crawler/${crawlerDocumentId}`),
+  exportDocument: (id: number, documentId: number) =>
+    api.get<any, Blob>(`/knowledge-bases/${id}/documents/${documentId}/export`, { responseType: 'blob' }),
+  chat: (id: number, payload: { question: string; providerId?: string; model?: string }) =>
+    api.post<any, AiChatResult>(`/knowledge-bases/${id}/chat`, payload)
 }
 
 // 配置API

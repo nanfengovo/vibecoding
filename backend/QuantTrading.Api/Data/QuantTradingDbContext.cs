@@ -23,6 +23,17 @@ public class QuantTradingDbContext : DbContext
     public DbSet<MonitorAlert> MonitorAlerts { get; set; } = null!;
     public DbSet<SystemConfig> SystemConfigs { get; set; } = null!;
     public DbSet<NotificationLog> NotificationLogs { get; set; } = null!;
+    public DbSet<AppUser> AppUsers { get; set; } = null!;
+    public DbSet<UserWatchlistItem> UserWatchlistItems { get; set; } = null!;
+    public DbSet<AiChatSessionRecord> AiChatSessions { get; set; } = null!;
+    public DbSet<AiChatMessageRecord> AiChatMessages { get; set; } = null!;
+    public DbSet<AiMemoryRecord> AiMemories { get; set; } = null!;
+    public DbSet<CrawlerSource> CrawlerSources { get; set; } = null!;
+    public DbSet<CrawlerJob> CrawlerJobs { get; set; } = null!;
+    public DbSet<CrawlerDocument> CrawlerDocuments { get; set; } = null!;
+    public DbSet<KnowledgeBase> KnowledgeBases { get; set; } = null!;
+    public DbSet<KnowledgeDocument> KnowledgeDocuments { get; set; } = null!;
+    public DbSet<KnowledgeChunk> KnowledgeChunks { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -64,6 +75,44 @@ public class QuantTradingDbContext : DbContext
         modelBuilder.Entity<SystemConfig>()
             .HasIndex(c => new { c.Category, c.Key })
             .IsUnique();
+
+        modelBuilder.Entity<AppUser>()
+            .HasIndex(u => u.Username)
+            .IsUnique();
+
+        modelBuilder.Entity<UserWatchlistItem>()
+            .HasIndex(w => new { w.UserId, w.Symbol })
+            .IsUnique();
+
+        modelBuilder.Entity<AiChatSessionRecord>()
+            .HasIndex(s => new { s.UserId, s.UpdatedAt });
+
+        modelBuilder.Entity<AiChatMessageRecord>()
+            .HasIndex(m => new { m.SessionId, m.CreatedAt });
+
+        modelBuilder.Entity<AiChatMessageRecord>()
+            .HasOne(m => m.Session)
+            .WithMany(s => s.Messages)
+            .HasForeignKey(m => m.SessionId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<AiMemoryRecord>()
+            .HasIndex(m => new { m.UserId, m.IsArchived, m.UpdatedAt });
+
+        modelBuilder.Entity<CrawlerSource>()
+            .HasIndex(s => new { s.UserId, s.IsEnabled });
+
+        modelBuilder.Entity<CrawlerDocument>()
+            .HasIndex(d => new { d.UserId, d.ContentHash });
+
+        modelBuilder.Entity<KnowledgeBase>()
+            .HasIndex(k => new { k.UserId, k.Name });
+
+        modelBuilder.Entity<KnowledgeDocument>()
+            .HasIndex(d => new { d.KnowledgeBaseId, d.ContentHash });
+
+        modelBuilder.Entity<KnowledgeChunk>()
+            .HasIndex(c => new { c.KnowledgeBaseId, c.DocumentId, c.ChunkIndex });
 
         // Seed initial system configs
         modelBuilder.Entity<SystemConfig>().HasData(
@@ -138,6 +187,31 @@ public class QuantTradingDbContext : DbContext
             .Property(item => item.Value)
             .HasColumnType("text");
         modelBuilder.Entity<NotificationLog>()
+            .Property(item => item.Content)
+            .HasColumnType("text");
+
+        modelBuilder.Entity<AiChatMessageRecord>()
+            .Property(item => item.Content)
+            .HasColumnType("text");
+        modelBuilder.Entity<AiChatMessageRecord>()
+            .Property(item => item.MarketContextJson)
+            .HasColumnType("text");
+        modelBuilder.Entity<AiMemoryRecord>()
+            .Property(item => item.Content)
+            .HasColumnType("text");
+        modelBuilder.Entity<CrawlerJob>()
+            .Property(item => item.ErrorMessage)
+            .HasColumnType("text");
+        modelBuilder.Entity<CrawlerDocument>()
+            .Property(item => item.Markdown)
+            .HasColumnType("text");
+        modelBuilder.Entity<CrawlerDocument>()
+            .Property(item => item.Summary)
+            .HasColumnType("text");
+        modelBuilder.Entity<KnowledgeDocument>()
+            .Property(item => item.Markdown)
+            .HasColumnType("text");
+        modelBuilder.Entity<KnowledgeChunk>()
             .Property(item => item.Content)
             .HasColumnType("text");
     }

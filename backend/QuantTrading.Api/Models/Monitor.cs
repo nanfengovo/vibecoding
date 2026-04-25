@@ -7,6 +7,8 @@ public class MonitorRule
 {
     [Key]
     public int Id { get; set; }
+
+    public int? UserId { get; set; }
     
     [Required]
     [StringLength(100)]
@@ -52,6 +54,8 @@ public class MonitorAlert
 {
     [Key]
     public long Id { get; set; }
+
+    public int? UserId { get; set; }
     
     public int MonitorRuleId { get; set; }
     

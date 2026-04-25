@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -13,6 +14,7 @@ using System.Text;
 namespace QuantTrading.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class ConfigController : ControllerBase
 {
@@ -53,7 +55,7 @@ public class ConfigController : ControllerBase
         {
             LongBridge = new LongBridgeConfigResponse
             {
-                AppKey = GetString(configs, "longbridge", "AppKey", _configuration["LongBridge:AppKey"]),
+                AppKey = GetSecret(configs, "longbridge", "AppKey", _configuration["LongBridge:AppKey"]),
                 AppSecret = GetSecret(configs, "longbridge", "AppSecret", _configuration["LongBridge:AppSecret"]),
                 AccessToken = GetSecret(configs, "longbridge", "AccessToken", _configuration["LongBridge:AccessToken"]),
                 BaseUrl = GetString(configs, "longbridge", "BaseUrl", _configuration["LongBridge:BaseUrl"] ?? "https://openapi.longbridge.com"),
@@ -110,6 +112,7 @@ public class ConfigController : ControllerBase
     }
 
     [HttpGet("{category}")]
+    [Authorize(Roles = UserRoles.Admin)]
     public async Task<ActionResult<Dictionary<string, string>>> GetByCategory(string category)
     {
         var configs = await _dbContext.SystemConfigs
@@ -124,6 +127,7 @@ public class ConfigController : ControllerBase
     }
 
     [HttpPut]
+    [Authorize(Roles = UserRoles.Admin)]
     public async Task<ActionResult> Update([FromBody] UpdateSystemConfigRequest request)
     {
         if (request.LongBridge is not null)
@@ -161,6 +165,7 @@ public class ConfigController : ControllerBase
     }
 
     [HttpPut("{category}")]
+    [Authorize(Roles = UserRoles.Admin)]
     public async Task<ActionResult> UpdateCategory(string category, [FromBody] Dictionary<string, string> values)
     {
         foreach (var (key, value) in values)
@@ -173,6 +178,7 @@ public class ConfigController : ControllerBase
     }
 
     [HttpPost("test/{channel}")]
+    [Authorize(Roles = UserRoles.Admin)]
     public async Task<ActionResult> TestNotification(string channel)
     {
         if (channel.Equals("longbridge", StringComparison.OrdinalIgnoreCase))
@@ -288,6 +294,7 @@ public class ConfigController : ControllerBase
     }
 
     [HttpGet("notifications/logs")]
+    [Authorize(Roles = UserRoles.Admin)]
     public async Task<ActionResult<List<NotificationLog>>> GetNotificationLogs([FromQuery] int limit = 50)
     {
         var logs = await _dbContext.NotificationLogs
@@ -739,6 +746,7 @@ public class ConfigController : ControllerBase
 
         return (category.ToLowerInvariant(), key.ToLowerInvariant()) switch
         {
+            ("longbridge", "appkey") => true,
             ("longbridge", "appsecret") => true,
             ("longbridge", "accesstoken") => true,
             ("longbridge", "mcpauthtoken") => true,

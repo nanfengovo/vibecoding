@@ -342,23 +342,28 @@ async function loadProviders() {
   }
 }
 
-function createSession() {
-  chatStore.createNewSession()
+async function createSession() {
+  await chatStore.createNewSession()
   ensureSessionDefaults()
 }
 
-function switchSession(sessionId: string) {
-  chatStore.switchSession(sessionId)
+async function switchSession(sessionId: string) {
+  await chatStore.switchSession(sessionId)
   ensureSessionDefaults()
 }
 
-function deleteSession(sessionId: string) {
-  chatStore.removeSession(sessionId)
+async function deleteSession(sessionId: string) {
+  await chatStore.removeSession(sessionId)
   ensureSessionDefaults()
 }
 
-function clearCurrentSession() {
-  chatStore.clearActiveSessionMessages()
+async function clearCurrentSession() {
+  const id = activeSessionId.value
+  if (id) {
+    await chatStore.removeSession(id)
+  } else {
+    chatStore.clearActiveSessionMessages()
+  }
   ElMessage.success('当前会话已清空')
 }
 
@@ -498,9 +503,9 @@ watch(
   }
 )
 
-onMounted(() => {
-  chatStore.ensureHydrated()
-  loadProviders()
+onMounted(async () => {
+  await chatStore.loadSessions()
+  await loadProviders()
 })
 </script>
 

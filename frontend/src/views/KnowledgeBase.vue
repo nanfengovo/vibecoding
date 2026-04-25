@@ -1,0 +1,300 @@
+<template>
+  <div class="knowledge-page">
+    <div class="page-header">
+      <h1>知识库</h1>
+      <el-button type="primary" @click="createKb">新建知识库</el-button>
+    </div>
+
+    <div class="knowledge-layout">
+      <aside class="card kb-list">
+        <div
+          v-for="kb in knowledgeBases"
+          :key="kb.id"
+          :class="['kb-item', { active: kb.id === activeKbId }]"
+          @click="selectKb(kb.id)"
+        >
+          <strong>{{ kb.name }}</strong>
+          <span>{{ kb.description || '暂无描述' }}</span>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <section class="card">
+          <div class="section-title">Markdown 导入</div>
+          <el-form label-position="top">
+            <el-form-item label="标题">
+              <el-input v-model="importForm.title" />
+            </el-form-item>
+            <el-form-item label="Markdown">
+              <el-input v-model="importForm.markdown" type="textarea" :rows="8" />
+            </el-form-item>
+            <el-button type="primary" :disabled="!activeKbId" @click="importMarkdown">导入并分片</el-button>
+          </el-form>
+        </section>
+
+        <section class="card">
+          <div class="section-title">文档</div>
+          <el-table :data="documents" height="260" @row-click="selectDoc">
+            <el-table-column prop="title" label="标题" min-width="220" />
+            <el-table-column prop="sourceType" label="来源" width="130" />
+            <el-table-column label="操作" width="140">
+              <template #default="{ row }">
+                <el-button link type="primary" @click.stop="exportDoc(row)">导出</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </section>
+
+        <section class="card">
+          <div class="section-title">从采集文档入库</div>
+          <el-table :data="crawlerDocs" height="220">
+            <el-table-column prop="title" label="标题" min-width="220" />
+            <el-table-column prop="symbol" label="标的" width="110" />
+            <el-table-column label="操作" width="120">
+              <template #default="{ row }">
+                <el-button link type="primary" :disabled="!activeKbId" @click="importCrawler(row.id)">入库</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </section>
+
+        <section class="card chat-card">
+          <div class="section-title">知识库 AI</div>
+          <div class="chat-row">
+            <el-input v-model="question" placeholder="只基于当前知识库提问" @keydown.enter.prevent="ask" />
+            <el-button type="primary" :loading="asking" :disabled="!activeKbId" @click="ask">提问</el-button>
+          </div>
+          <div v-if="answer" class="answer" v-html="answerHtml" />
+          <div v-if="references.length" class="references">
+            <div v-for="ref in references" :key="ref.chunkId" class="reference">
+              <strong>{{ ref.title }}</strong>
+              <p>{{ ref.snippet }}</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <el-dialog v-model="kbDialogVisible" title="知识库" width="520px">
+      <el-form label-width="80px">
+        <el-form-item label="名称">
+          <el-input v-model="kbForm.name" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="kbForm.description" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="kbDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveKb">保存</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { crawlerApi, knowledgeApi } from '@/api'
+import type { AiKnowledgeReference, CrawlerDocument, KnowledgeBase, KnowledgeDocument } from '@/types'
+import { parseAiMarkdown } from '@/utils/aiMarkdown'
+
+const knowledgeBases = ref<KnowledgeBase[]>([])
+const documents = ref<KnowledgeDocument[]>([])
+const crawlerDocs = ref<CrawlerDocument[]>([])
+const activeKbId = ref<number | null>(null)
+const selectedDoc = ref<KnowledgeDocument | null>(null)
+const kbDialogVisible = ref(false)
+const asking = ref(false)
+const question = ref('')
+const answer = ref('')
+const references = ref<AiKnowledgeReference[]>([])
+const kbForm = reactive({ name: '', description: '' })
+const importForm = reactive({ title: '', markdown: '' })
+
+const answerHtml = computed(() => parseAiMarkdown(answer.value || '', 'kb-answer').html)
+
+async function loadKbs() {
+  knowledgeBases.value = await knowledgeApi.list()
+  if (!activeKbId.value && knowledgeBases.value.length) {
+    activeKbId.value = knowledgeBases.value[0].id
+  }
+  await loadDocuments()
+}
+
+async function loadDocuments() {
+  if (!activeKbId.value) {
+    documents.value = []
+    return
+  }
+  documents.value = await knowledgeApi.listDocuments(activeKbId.value)
+}
+
+function selectKb(id: number) {
+  activeKbId.value = id
+  selectedDoc.value = null
+  void loadDocuments()
+}
+
+function createKb() {
+  kbForm.name = '我的知识库'
+  kbForm.description = ''
+  kbDialogVisible.value = true
+}
+
+async function saveKb() {
+  if (!kbForm.name.trim()) {
+    ElMessage.warning('请输入知识库名称')
+    return
+  }
+  const kb = await knowledgeApi.create({ name: kbForm.name.trim(), description: kbForm.description.trim() })
+  activeKbId.value = kb.id
+  kbDialogVisible.value = false
+  await loadKbs()
+}
+
+async function importMarkdown() {
+  if (!activeKbId.value || !importForm.markdown.trim()) {
+    ElMessage.warning('请选择知识库并输入 Markdown')
+    return
+  }
+  await knowledgeApi.importMarkdown(activeKbId.value, {
+    title: importForm.title,
+    markdown: importForm.markdown
+  })
+  importForm.title = ''
+  importForm.markdown = ''
+  ElMessage.success('已导入知识库')
+  await loadDocuments()
+}
+
+async function importCrawler(id: number) {
+  if (!activeKbId.value) {
+    return
+  }
+  await knowledgeApi.importCrawlerDocument(activeKbId.value, id)
+  ElMessage.success('采集文档已入库')
+  await loadDocuments()
+}
+
+function selectDoc(row: KnowledgeDocument) {
+  selectedDoc.value = row
+  importForm.title = row.title
+  importForm.markdown = row.markdown
+}
+
+async function exportDoc(row: KnowledgeDocument) {
+  if (!activeKbId.value) {
+    return
+  }
+  const blob = await knowledgeApi.exportDocument(activeKbId.value, row.id)
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `${row.title || 'document'}.md`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+async function ask() {
+  if (!activeKbId.value || !question.value.trim()) {
+    ElMessage.warning('请输入问题')
+    return
+  }
+  asking.value = true
+  try {
+    const result = await knowledgeApi.chat(activeKbId.value, { question: question.value.trim() })
+    answer.value = result.content
+    references.value = result.references || []
+  } finally {
+    asking.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadKbs()
+  crawlerDocs.value = await crawlerApi.listDocuments()
+})
+</script>
+
+<style scoped lang="scss">
+.knowledge-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.kb-list {
+  padding: 10px;
+}
+
+.kb-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 8px;
+  cursor: pointer;
+
+  span {
+    color: var(--qt-text-muted);
+    font-size: 12px;
+  }
+
+  &.active {
+    background: color-mix(in srgb, var(--qt-card-bg) 84%, #3b82f6 16%);
+    outline: 1px solid #3b82f6;
+  }
+}
+
+.workspace {
+  display: grid;
+  gap: 16px;
+}
+
+.card {
+  padding: 16px;
+}
+
+.section-title {
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.chat-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.answer {
+  margin-top: 14px;
+  line-height: 1.75;
+}
+
+.references {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.reference {
+  border: 1px solid var(--qt-border);
+  border-radius: 8px;
+  padding: 10px;
+
+  p {
+    margin: 6px 0 0;
+    color: var(--qt-text-secondary);
+  }
+}
+
+@media (max-width: 960px) {
+  .knowledge-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-row {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

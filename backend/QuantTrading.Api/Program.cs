@@ -1,12 +1,18 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 using Quartz;
 using Serilog;
+using System.Text;
 using QuantTrading.Api.Data;
 using QuantTrading.Api.Services.AI;
+using QuantTrading.Api.Services.Auth;
 using QuantTrading.Api.Services.Notification;
 using QuantTrading.Api.Services.LongBridge;
 using QuantTrading.Api.Services.Strategy;
 using QuantTrading.Api.Services.Backtest;
+using QuantTrading.Api.Services.Crawler;
+using QuantTrading.Api.Services.Knowledge;
 using QuantTrading.Api.Services.Monitor;
 using QuantTrading.Api.Services.Realtime;
 using QuantTrading.Api.Jobs;
@@ -31,6 +37,24 @@ builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new() { Title = "QuantTrading API", Version = "v1" });
 });
+
+var jwtSecret = JwtTokenService.ResolveJwtSecret(builder.Configuration);
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Auth:JwtIssuer"] ?? "QuantTrading",
+            ValidAudience = builder.Configuration["Auth:JwtAudience"] ?? "QuantTradingWeb",
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            ClockSkew = TimeSpan.FromMinutes(2)
+        };
+    });
 
 // Configure CORS
 var corsOrigins = builder.Configuration
@@ -135,6 +159,13 @@ builder.Services.AddHttpClient("LongBridge", client =>
     return handler;
 });
 
+builder.Services.AddHttpClient("Crawler", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(45);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("QuantTradingCrawler/1.0");
+    client.DefaultRequestHeaders.Accept.ParseAdd("text/markdown, text/plain, application/rss+xml, application/xml, text/html;q=0.8");
+});
+
 // Register Services
 builder.Services.AddSingleton<ILongBridgeService, LongBridgeService>();
 builder.Services.AddScoped<IStrategyService, StrategyService>();
@@ -148,7 +179,14 @@ builder.Services.AddScoped<IMonitorService, MonitorService>();
 builder.Services.AddScoped<IWatchlistService, WatchlistService>();
 builder.Services.AddScoped<ITradeService, TradeService>();
 builder.Services.AddScoped<IAiAnalysisService, OpenAiAnalysisService>();
+builder.Services.AddScoped<IKnowledgeService, KnowledgeService>();
+builder.Services.AddScoped<ICrawlerService, CrawlerService>();
 builder.Services.AddSingleton<IRealtimePushService, RealtimePushService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<IPasswordService, PasswordService>();
+builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+builder.Services.AddScoped<DatabaseBootstrapService>();
 
 // Configure Quartz for scheduled jobs
 builder.Services.AddQuartz(q =>
@@ -170,6 +208,13 @@ builder.Services.AddQuartz(q =>
         .ForJob(monitorJobKey)
         .WithIdentity("MonitorTrigger")
         .WithCronSchedule("0 */1 * * * ?")); // Every minute
+
+    var crawlerJobKey = new JobKey("CrawlerJob");
+    q.AddJob<CrawlerJob>(opts => opts.WithIdentity(crawlerJobKey));
+    q.AddTrigger(opts => opts
+        .ForJob(crawlerJobKey)
+        .WithIdentity("CrawlerTrigger")
+        .WithCronSchedule("0 */1 * * * ?")); // Every minute, service enforces source interval
 });
 
 builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
@@ -187,6 +232,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("AllowVue");
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapGet("/", () => Results.Ok(new
@@ -211,6 +257,8 @@ using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<QuantTradingDbContext>();
     dbContext.Database.EnsureCreated();
+    var bootstrap = scope.ServiceProvider.GetRequiredService<DatabaseBootstrapService>();
+    await bootstrap.InitializeAsync();
 }
 
 app.Run();

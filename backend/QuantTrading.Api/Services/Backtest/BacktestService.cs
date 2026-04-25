@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using QuantTrading.Api.Data;
 using QuantTrading.Api.Models;
+using QuantTrading.Api.Services.Auth;
 using QuantTrading.Api.Services.LongBridge;
 using QuantTrading.Api.Services.Strategy;
 
@@ -10,17 +11,20 @@ namespace QuantTrading.Api.Services.Backtest;
 public class BacktestService : IBacktestService
 {
     private readonly QuantTradingDbContext _dbContext;
+    private readonly ICurrentUserService _currentUser;
     private readonly ILongBridgeService _longBridgeService;
     private readonly IStrategyEngine _strategyEngine;
     private readonly ILogger<BacktestService> _logger;
 
     public BacktestService(
         QuantTradingDbContext dbContext,
+        ICurrentUserService currentUser,
         ILongBridgeService longBridgeService,
         IStrategyEngine strategyEngine,
         ILogger<BacktestService> logger)
     {
         _dbContext = dbContext;
+        _currentUser = currentUser;
         _longBridgeService = longBridgeService;
         _strategyEngine = strategyEngine;
         _logger = logger;
@@ -28,23 +32,34 @@ public class BacktestService : IBacktestService
 
     public async Task<List<Models.Backtest>> GetAllAsync()
     {
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
         return await _dbContext.Backtests
             .Include(b => b.Strategy)
+            .Where(b => b.UserId == userId)
             .OrderByDescending(b => b.CreatedAt)
             .ToListAsync();
     }
 
     public async Task<Models.Backtest?> GetByIdAsync(int id)
     {
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
         return await _dbContext.Backtests
             .Include(b => b.Strategy)
-            .FirstOrDefaultAsync(b => b.Id == id);
+            .FirstOrDefaultAsync(b => b.Id == id && b.UserId == userId);
     }
 
     public async Task<Models.Backtest> CreateAsync(int strategyId, DateTime startDate, DateTime endDate, decimal initialCapital, string name)
     {
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var strategyExists = await _dbContext.Strategies.AnyAsync(s => s.Id == strategyId && s.UserId == userId);
+        if (!strategyExists)
+        {
+            throw new ArgumentException("Strategy not found");
+        }
+
         var backtest = new Models.Backtest
         {
+            UserId = userId,
             StrategyId = strategyId,
             Name = name,
             StartDate = startDate,
@@ -62,9 +77,10 @@ public class BacktestService : IBacktestService
 
     public async Task<Models.Backtest> RunAsync(int id)
     {
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
         var backtest = await _dbContext.Backtests
             .Include(b => b.Strategy)
-            .FirstOrDefaultAsync(b => b.Id == id);
+            .FirstOrDefaultAsync(b => b.Id == id && b.UserId == userId);
 
         if (backtest == null)
             throw new ArgumentException("Backtest not found");
@@ -440,7 +456,8 @@ public class BacktestService : IBacktestService
 
     public async Task<bool> DeleteAsync(int id)
     {
-        var backtest = await _dbContext.Backtests.FindAsync(id);
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var backtest = await _dbContext.Backtests.FirstOrDefaultAsync(b => b.Id == id && b.UserId == userId);
         if (backtest == null)
             return false;
 

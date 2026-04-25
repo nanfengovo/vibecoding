@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using QuantTrading.Api.Models;
 using QuantTrading.Api.Services.LongBridge;
 using QuantTrading.Api.Services.Monitor;
@@ -96,6 +97,7 @@ public class StocksController : ControllerBase
         return Ok(klines);
     }
 
+    [Authorize]
     [HttpGet("watchlist")]
     public async Task<ActionResult<List<Stock>>> GetWatchlist()
     {
@@ -103,6 +105,7 @@ public class StocksController : ControllerBase
         return Ok(stocks);
     }
 
+    [Authorize]
     [HttpPost("watchlist")]
     public async Task<ActionResult<Stock>> AddToWatchlist([FromBody] AddWatchlistRequest request)
     {
@@ -112,6 +115,7 @@ public class StocksController : ControllerBase
         return Ok(stock);
     }
 
+    [Authorize]
     [HttpDelete("watchlist/{id}")]
     public async Task<ActionResult> RemoveFromWatchlist(int id)
     {
@@ -121,6 +125,7 @@ public class StocksController : ControllerBase
         return NoContent();
     }
 
+    [Authorize]
     [HttpPut("watchlist/{id}/notes")]
     public async Task<ActionResult<Stock>> UpdateNotes(int id, [FromBody] UpdateNotesRequest request)
     {
@@ -130,6 +135,7 @@ public class StocksController : ControllerBase
         return Ok(stock);
     }
 
+    [Authorize]
     [HttpPost("watchlist/refresh")]
     public async Task<ActionResult> RefreshWatchlist()
     {

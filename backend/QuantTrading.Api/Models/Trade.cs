@@ -7,6 +7,8 @@ public class Trade
 {
     [Key]
     public long Id { get; set; }
+
+    public int? UserId { get; set; }
     
     [StringLength(50)]
     public string OrderId { get; set; } = string.Empty;
@@ -55,6 +57,8 @@ public class Position
 {
     [Key]
     public int Id { get; set; }
+
+    public int? UserId { get; set; }
     
     [Required]
     [StringLength(20)]
@@ -90,6 +94,8 @@ public class Account
 {
     [Key]
     public int Id { get; set; }
+
+    public int? UserId { get; set; }
     
     [StringLength(50)]
     public string AccountId { get; set; } = string.Empty;

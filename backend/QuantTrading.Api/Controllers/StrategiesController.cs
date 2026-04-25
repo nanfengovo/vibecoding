@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using QuantTrading.Api.Models;
 using QuantTrading.Api.Services.Realtime;
@@ -6,6 +7,7 @@ using QuantTrading.Api.Services.Strategy;
 namespace QuantTrading.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class StrategiesController : ControllerBase
 {

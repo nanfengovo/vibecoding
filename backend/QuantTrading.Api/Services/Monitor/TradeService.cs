@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using QuantTrading.Api.Data;
 using QuantTrading.Api.Models;
+using QuantTrading.Api.Services.Auth;
 using QuantTrading.Api.Services.LongBridge;
 using QuantTrading.Api.Services.Realtime;
 
@@ -9,17 +10,20 @@ namespace QuantTrading.Api.Services.Monitor;
 public class TradeService : ITradeService
 {
     private readonly QuantTradingDbContext _dbContext;
+    private readonly ICurrentUserService _currentUser;
     private readonly ILongBridgeService _longBridgeService;
     private readonly IRealtimePushService _realtimePushService;
     private readonly ILogger<TradeService> _logger;
 
     public TradeService(
         QuantTradingDbContext dbContext,
+        ICurrentUserService currentUser,
         ILongBridgeService longBridgeService,
         IRealtimePushService realtimePushService,
         ILogger<TradeService> logger)
     {
         _dbContext = dbContext;
+        _currentUser = currentUser;
         _longBridgeService = longBridgeService;
         _realtimePushService = realtimePushService;
         _logger = logger;
@@ -27,7 +31,8 @@ public class TradeService : ITradeService
 
     public async Task<List<Trade>> GetTradesAsync(DateTime? startDate = null, DateTime? endDate = null, int limit = 100)
     {
-        var query = _dbContext.Trades.AsQueryable();
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
+        var query = _dbContext.Trades.Where(t => t.UserId == userId);
         
         if (startDate.HasValue)
             query = query.Where(t => t.CreatedAt >= startDate.Value);
@@ -50,6 +55,11 @@ public class TradeService : ITradeService
         // Save new trades to database
         if (newTrades.Any())
         {
+            foreach (var trade in newTrades)
+            {
+                trade.UserId = userId;
+            }
+
             _dbContext.Trades.AddRange(newTrades);
             await _dbContext.SaveChangesAsync();
             localTrades.AddRange(newTrades);
@@ -60,12 +70,13 @@ public class TradeService : ITradeService
 
     public async Task<List<Position>> GetPositionsAsync()
     {
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
         var positions = await _longBridgeService.GetPositionsAsync();
         
         // Update local positions
         foreach (var position in positions)
         {
-            var existing = await _dbContext.Positions.FirstOrDefaultAsync(p => p.Symbol == position.Symbol);
+            var existing = await _dbContext.Positions.FirstOrDefaultAsync(p => p.Symbol == position.Symbol && p.UserId == userId);
             if (existing != null)
             {
                 existing.Quantity = position.Quantity;
@@ -78,6 +89,7 @@ public class TradeService : ITradeService
             }
             else
             {
+                position.UserId = userId;
                 position.OpenedAt = DateTime.UtcNow;
                 _dbContext.Positions.Add(position);
             }
@@ -86,7 +98,7 @@ public class TradeService : ITradeService
         // Remove closed positions
         var currentSymbols = positions.Select(p => p.Symbol).ToHashSet();
         var closedPositions = await _dbContext.Positions
-            .Where(p => !currentSymbols.Contains(p.Symbol))
+            .Where(p => p.UserId == userId && !currentSymbols.Contains(p.Symbol))
             .ToListAsync();
         
         _dbContext.Positions.RemoveRange(closedPositions);
@@ -97,11 +109,12 @@ public class TradeService : ITradeService
 
     public async Task<Account?> GetAccountAsync()
     {
+        var userId = await _currentUser.GetEffectiveUserIdAsync();
         var account = await _longBridgeService.GetAccountAsync();
         
         if (account != null)
         {
-            var existing = await _dbContext.Accounts.FirstOrDefaultAsync();
+            var existing = await _dbContext.Accounts.FirstOrDefaultAsync(item => item.UserId == userId);
             if (existing != null)
             {
                 existing.TotalAssets = account.TotalAssets;
@@ -113,6 +126,7 @@ public class TradeService : ITradeService
             }
             else
             {
+                account.UserId = userId;
                 _dbContext.Accounts.Add(account);
             }
             
@@ -134,6 +148,7 @@ public class TradeService : ITradeService
         
         var trade = new Trade
         {
+            UserId = await _currentUser.GetEffectiveUserIdAsync(),
             OrderId = orderId,
             Symbol = symbol.ToUpper(),
             Side = side.ToLower(),
@@ -178,7 +193,8 @@ public class TradeService : ITradeService
         
         if (result)
         {
-            var trade = await _dbContext.Trades.FirstOrDefaultAsync(t => t.OrderId == orderId);
+            var userId = await _currentUser.GetEffectiveUserIdAsync();
+            var trade = await _dbContext.Trades.FirstOrDefaultAsync(t => t.OrderId == orderId && t.UserId == userId);
             if (trade != null)
             {
                 trade.Status = "cancelled";

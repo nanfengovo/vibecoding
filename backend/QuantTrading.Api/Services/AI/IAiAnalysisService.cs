@@ -56,6 +56,9 @@ public sealed class AiChatInput
     public string SkillId { get; init; } = string.Empty;
     public string ProviderId { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
+    public IReadOnlyList<string> ConversationContext { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> MemoryContext { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<AiKnowledgeReference> KnowledgeContext { get; init; } = Array.Empty<AiKnowledgeReference>();
 }
 
 public sealed class AiChatResult
@@ -64,6 +67,8 @@ public sealed class AiChatResult
     public string Content { get; init; } = string.Empty;
     public DateTime GeneratedAt { get; init; } = DateTime.UtcNow;
     public AiChatMarketContext? MarketContext { get; init; }
+    public long? SessionId { get; init; }
+    public List<AiKnowledgeReference> References { get; init; } = new();
 }
 
 public sealed class AiChatMarketContext
@@ -77,6 +82,15 @@ public sealed class AiChatMarketContext
     public bool MarketOpen { get; init; }
     public string Freshness { get; init; } = "stale";
     public string Source { get; init; } = "longbridge";
+}
+
+public sealed class AiKnowledgeReference
+{
+    public long DocumentId { get; init; }
+    public long ChunkId { get; init; }
+    public string Title { get; init; } = string.Empty;
+    public string SourceUrl { get; init; } = string.Empty;
+    public string Snippet { get; init; } = string.Empty;
 }
 
 public sealed class AiPromptOptimizeInput

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Newtonsoft.Json;
 using System.Text.Json;
 using QuantTrading.Api.Models;
@@ -7,6 +8,7 @@ using QuantTrading.Api.Services.Monitor;
 namespace QuantTrading.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class MonitorController : ControllerBase
 {

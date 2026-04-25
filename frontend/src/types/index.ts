@@ -290,6 +290,8 @@ export interface AiChatResult {
   content: string
   generatedAt: string
   marketContext?: AiChatMarketContext
+  sessionId?: number
+  references?: AiKnowledgeReference[]
 }
 
 export interface AiChatMarketContext {
@@ -329,4 +331,124 @@ export interface StockAnalysisResult {
   model: string
   analysis: string
   generatedAt: string
+}
+
+export interface AuthUser {
+  id: number
+  username: string
+  displayName: string
+  role: 'admin' | 'user' | string
+  isActive: boolean
+  createdAt: string
+  lastLoginAt?: string
+}
+
+export interface AuthResponse {
+  token: string
+  user: AuthUser
+}
+
+export interface AiChatSessionSummary {
+  id: number
+  title: string
+  symbol: string
+  skillId: string
+  providerId: string
+  model: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AiChatMessageRecord {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  model: string
+  marketContext?: AiChatMarketContext
+  isError: boolean
+  createdAt: string
+}
+
+export interface AiChatSessionDetail {
+  session: AiChatSessionSummary
+  messages: AiChatMessageRecord[]
+}
+
+export interface AiMemoryRecord {
+  id: number
+  type: string
+  title: string
+  content: string
+  symbol: string
+  tags: string
+  priority: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AiKnowledgeReference {
+  documentId: number
+  chunkId: number
+  title: string
+  sourceUrl: string
+  snippet: string
+}
+
+export interface CrawlerSource {
+  id: number
+  name: string
+  type: 'longbridge_news' | 'longbridge_quote' | 'rss' | 'markdown' | 'web' | string
+  url: string
+  symbol: string
+  tags: string
+  isEnabled: boolean
+  crawlIntervalMinutes: number
+  maxPages: number
+  lastRunAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CrawlerJobRecord {
+  id: number
+  sourceId: number
+  status: string
+  documentsFound: number
+  documentsSaved: number
+  errorMessage: string
+  startedAt: string
+  finishedAt?: string
+}
+
+export interface CrawlerDocument {
+  id: number
+  sourceId: number
+  symbol: string
+  title: string
+  url: string
+  markdown: string
+  summary: string
+  tags: string
+  publishedAt?: string
+  createdAt: string
+}
+
+export interface KnowledgeBase {
+  id: number
+  name: string
+  description: string
+  isDefault: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface KnowledgeDocument {
+  id: number
+  knowledgeBaseId: number
+  title: string
+  sourceUrl: string
+  sourceType: string
+  markdown: string
+  createdAt: string
+  updatedAt: string
 }

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using QuantTrading.Api.Models;
 using QuantTrading.Api.Services.Monitor;
@@ -5,6 +6,7 @@ using QuantTrading.Api.Services.Monitor;
 namespace QuantTrading.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class TradesController : ControllerBase
 {

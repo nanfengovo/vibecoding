@@ -7,6 +7,8 @@ public class Strategy
 {
     [Key]
     public int Id { get; set; }
+
+    public int? UserId { get; set; }
     
     [Required]
     [StringLength(100)]
@@ -89,6 +91,8 @@ public class StrategyExecution
 {
     [Key]
     public long Id { get; set; }
+
+    public int? UserId { get; set; }
     
     public int StrategyId { get; set; }
     

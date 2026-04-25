@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { aiApi } from '@/api'
-import type { AiChatMarketContext } from '@/types'
+import type { AiChatMarketContext, AiChatMessageRecord, AiChatSessionSummary } from '@/types'
 
 export interface AiChatMessage {
   id: string
@@ -36,6 +36,10 @@ const DEFAULT_SESSION_TITLE = '新会话'
 
 function createSessionId() {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function isBackendSessionId(id: string) {
+  return /^\d+$/.test(String(id || ''))
 }
 
 function createMessageId(prefix: 'u' | 'a') {
@@ -92,6 +96,32 @@ function createSession(seed?: Partial<AiChatSession>): AiChatSession {
     providerId: String(seed?.providerId || ''),
     model: String(seed?.model || ''),
     messages: Array.isArray(seed?.messages) ? seed!.messages : []
+  }
+}
+
+function fromBackendSession(row: AiChatSessionSummary, messages: AiChatMessage[] = []): AiChatSession {
+  return createSession({
+    id: String(row.id),
+    title: row.title,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    symbol: row.symbol,
+    skillId: row.skillId,
+    providerId: row.providerId,
+    model: row.model,
+    messages
+  })
+}
+
+function fromBackendMessage(row: AiChatMessageRecord): AiChatMessage {
+  return {
+    id: String(row.id),
+    role: row.role === 'assistant' ? 'assistant' : 'user',
+    content: row.content,
+    time: row.createdAt,
+    model: row.model || undefined,
+    marketContext: row.marketContext,
+    isError: row.isError
   }
 }
 
@@ -152,6 +182,7 @@ export const useAiChatStore = defineStore('ai-chat', () => {
   const draftQuestion = ref('')
   const sending = ref(false)
   const optimizing = ref(false)
+  const loadingSessions = ref(false)
 
   const activeSession = computed(() => {
     return sessions.value.find((item) => item.id === activeSessionId.value) || sessions.value[0] || null
@@ -192,6 +223,46 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     }
 
     hydrated.value = true
+    persist()
+  }
+
+  async function loadSessions() {
+    ensureHydrated()
+    loadingSessions.value = true
+    try {
+      const rows = await aiApi.listSessions()
+      if (!rows.length) {
+        const created = await aiApi.createSession({ title: DEFAULT_SESSION_TITLE })
+        sessions.value = [fromBackendSession(created)]
+        activeSessionId.value = String(created.id)
+        persist()
+        return
+      }
+
+      sessions.value = rows.map((row) => fromBackendSession(row))
+      if (!sessions.value.some((item) => item.id === activeSessionId.value)) {
+        activeSessionId.value = sessions.value[0].id
+      }
+      await loadSessionMessages(activeSessionId.value)
+      persist()
+    } finally {
+      loadingSessions.value = false
+    }
+  }
+
+  async function loadSessionMessages(sessionId: string) {
+    if (!isBackendSessionId(sessionId)) {
+      return
+    }
+
+    const detail = await aiApi.getSession(Number(sessionId))
+    const index = sessions.value.findIndex((item) => item.id === sessionId)
+    const next = fromBackendSession(detail.session, detail.messages.map(fromBackendMessage))
+    if (index >= 0) {
+      sessions.value[index] = next
+    } else {
+      sessions.value.unshift(next)
+    }
     persist()
   }
 
@@ -250,16 +321,17 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     persist()
   }
 
-  function createNewSession() {
+  async function createNewSession() {
     ensureHydrated()
-    const session = createSession()
+    const created = await aiApi.createSession({ title: DEFAULT_SESSION_TITLE })
+    const session = fromBackendSession(created)
     sessions.value.unshift(session)
     activeSessionId.value = session.id
     draftQuestion.value = ''
     persist()
   }
 
-  function switchSession(sessionId: string) {
+  async function switchSession(sessionId: string) {
     ensureHydrated()
     const exists = sessions.value.some((item) => item.id === sessionId)
     if (!exists) {
@@ -268,6 +340,7 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     activeSessionId.value = sessionId
     draftQuestion.value = ''
     persist()
+    await loadSessionMessages(sessionId)
   }
 
   function renameSession(sessionId: string, title: string) {
@@ -282,20 +355,18 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     persist()
   }
 
-  function removeSession(sessionId: string) {
+  async function removeSession(sessionId: string) {
     ensureHydrated()
+    if (isBackendSessionId(sessionId)) {
+      await aiApi.deleteSession(Number(sessionId))
+    }
+
     if (sessions.value.length <= 1) {
-      const only = sessions.value[0]
-      if (only) {
-        only.messages = []
-        only.title = DEFAULT_SESSION_TITLE
-        only.symbol = ''
-        only.model = ''
-        only.providerId = ''
-        touchSession(only)
-        draftQuestion.value = ''
-        persist()
-      }
+      const created = await aiApi.createSession({ title: DEFAULT_SESSION_TITLE })
+      sessions.value = [fromBackendSession(created)]
+      activeSessionId.value = String(created.id)
+      draftQuestion.value = ''
+      persist()
       return
     }
 
@@ -318,6 +389,26 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     session.title = DEFAULT_SESSION_TITLE
     touchSession(session)
     persist()
+  }
+
+  async function ensureBackendSession(session: AiChatSession) {
+    if (isBackendSessionId(session.id)) {
+      return Number(session.id)
+    }
+
+    const created = await aiApi.createSession({
+      title: session.title,
+      symbol: session.symbol,
+      skillId: session.skillId,
+      providerId: session.providerId,
+      model: session.model
+    })
+    session.id = String(created.id)
+    session.createdAt = created.createdAt
+    session.updatedAt = created.updatedAt
+    activeSessionId.value = session.id
+    persist()
+    return created.id
   }
 
   function upsertMessages(sessionId: string, nextMessages: AiChatMessage[]) {
@@ -384,12 +475,15 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     sending.value = true
 
     try {
+      const backendSessionId = await ensureBackendSession(session)
       const result = await aiApi.chat({
         question,
         symbol: symbol || undefined,
         skillId: skillId || undefined,
         providerId: providerId || undefined,
-        model: model || undefined
+        model: model || undefined,
+        sessionId: backendSessionId,
+        useMemory: true
       })
 
       const refreshedSession = sessions.value.find((item) => item.id === session.id)
@@ -409,6 +503,9 @@ export const useAiChatStore = defineStore('ai-chat', () => {
           isError: false
         }
       ])
+      if (result?.sessionId) {
+        await loadSessionMessages(String(result.sessionId))
+      }
     } catch (error: any) {
       const message = error?.response?.data?.message || error?.message || 'AI 调用失败'
       const refreshedSession = sessions.value.find((item) => item.id === session.id)
@@ -443,7 +540,10 @@ export const useAiChatStore = defineStore('ai-chat', () => {
     draftQuestion,
     sending,
     optimizing,
+    loadingSessions,
     ensureHydrated,
+    loadSessions,
+    loadSessionMessages,
     setDraftQuestion,
     updateSessionMeta,
     createNewSession,

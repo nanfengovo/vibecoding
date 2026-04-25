@@ -30,6 +30,9 @@ services:
     container_name: quant-backend
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
+      - Auth__JwtSecret=${AUTH_JWT_SECRET:-QuantTrading-Development-Jwt-Secret-Change-Me-2026}
+      - Auth__AdminUsername=${AUTH_ADMIN_USERNAME:-admin}
+      - Auth__AdminPassword=${AUTH_ADMIN_PASSWORD:-}
       - Database__Provider=${DB_PROVIDER:-sqlserver}
       - ConnectionStrings__DefaultConnection=${DB_CONNECTION:-Server=sqlserver;Database=QuantTrading;User Id=sa;Password=${DB_PASSWORD:-QuantTrading@2024};TrustServerCertificate=true}
       - LongBridge__AppKey=${LONGBRIDGE_APP_KEY}

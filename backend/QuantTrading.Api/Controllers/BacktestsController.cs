@@ -1,10 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using QuantTrading.Api.Models;
 using QuantTrading.Api.Services.Backtest;
 
 namespace QuantTrading.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class BacktestsController : ControllerBase
 {
@@ -34,14 +36,21 @@ public class BacktestsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<Backtest>> Create([FromBody] CreateBacktestRequest request)
     {
-        var backtest = await _backtestService.CreateAsync(
-            request.StrategyId,
-            request.StartDate,
-            request.EndDate,
-            request.InitialCapital,
-            request.Name
-        );
-        return CreatedAtAction(nameof(GetById), new { id = backtest.Id }, backtest);
+        try
+        {
+            var backtest = await _backtestService.CreateAsync(
+                request.StrategyId,
+                request.StartDate,
+                request.EndDate,
+                request.InitialCapital,
+                request.Name
+            );
+            return CreatedAtAction(nameof(GetById), new { id = backtest.Id }, backtest);
+        }
+        catch (ArgumentException ex)
+        {
+            return NotFound(ex.Message);
+        }
     }
 
     [HttpPost("{id}/run")]
