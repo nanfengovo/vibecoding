@@ -32,7 +32,7 @@ wait_backend_up() {
 start_tunnel() {
   extract_tunnel_url() {
     tail -n 300 "$TUNNEL_LOG" \
-      | awk 'match($0, /https:\/\/[-a-z0-9]+[.]trycloudflare[.]com/) { url = substr($0, RSTART, RLENGTH) } END { if (url != "") print url }'
+      | awk 'match($0, /https:\/\/[-a-z0-9]+[.]trycloudflare[.]com/) { candidate = substr($0, RSTART, RLENGTH); if (candidate != "https://api.trycloudflare.com") url = candidate } END { if (url != "") print url }'
   }
 
   pkill -f "cloudflared tunnel --url $BACKEND_LOCAL_URL" >/dev/null 2>&1 || true
