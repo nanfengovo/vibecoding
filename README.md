@@ -216,13 +216,13 @@ chmod +x scripts/keep_frontend_online.sh
 
 1. 检查本地后端健康（`http://localhost:15000/health`）
 2. 创建 `trycloudflare` 公网隧道
-3. 更新 Vercel `BACKEND_API_BASE_URL` 与 `VITE_SIGNALR_BASE_URL`
+3. 更新 Vercel `BACKEND_API_BASE_URL`、`VITE_API_BASE_URL` 与 `VITE_SIGNALR_BASE_URL`
 4. 自动触发前端生产部署
 5. 持续巡检，隧道失效后自动重建并重新同步
 
 注意：
 
-1. 脚本会把 `BACKEND_API_BASE_URL`/`VITE_SIGNALR_BASE_URL` 以 `no-sensitive` 方式写入 Vercel（因为这是公网隧道地址，本身可公开），这样可以避免“变量存在但线上函数读取为空”的问题。
+1. 脚本会把 `BACKEND_API_BASE_URL`/`VITE_API_BASE_URL`/`VITE_SIGNALR_BASE_URL` 以 `no-sensitive` 方式写入 Vercel（因为这是公网隧道地址，本身可公开），这样可以避免“变量存在但线上函数读取为空”的问题。
 2. 这是“本地后端在线即线上可用”的方案。若需要彻底独立（本机离线仍可用），需把后端部署到常驻云主机。
 
 ## 后端公网部署
@@ -249,12 +249,14 @@ OpenAI__BaseUrl=<模型 OpenAI 兼容地址>
 OpenAI__Model=<默认模型名称>
 ```
 
-部署完成后，把 Vercel 前端的 `BACKEND_API_BASE_URL` 和 `VITE_SIGNALR_BASE_URL` 更新为公网后端域名，然后重新部署前端：
+部署完成后，把 Vercel 前端的 `BACKEND_API_BASE_URL`、`VITE_API_BASE_URL` 和 `VITE_SIGNALR_BASE_URL` 更新为公网后端域名，然后重新部署前端：
 
 ```bash
 cd frontend
 vercel env rm BACKEND_API_BASE_URL production --yes
 vercel env add BACKEND_API_BASE_URL production --value "https://your-api.example.com" --no-sensitive --yes
+vercel env rm VITE_API_BASE_URL production --yes
+vercel env add VITE_API_BASE_URL production --value "https://your-api.example.com" --no-sensitive --yes
 vercel env rm VITE_SIGNALR_BASE_URL production --yes
 vercel env add VITE_SIGNALR_BASE_URL production --value "https://your-api.example.com" --no-sensitive --yes
 vercel --prod --yes

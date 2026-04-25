@@ -22,6 +22,7 @@
 - 2026-04-25 00:34：新增信息采集、知识库、用户管理前端页面；AI Chat 会话改为后端加载/创建/删除，并发送 `sessionId` 和 `useMemory`。
 - 2026-04-25 00:42：禁用破坏性管理员导入接口，配置读取继续脱敏，长桥 `AppKey` 也纳入 masked-preserve 逻辑。
 - 2026-04-25 00:55：修复登录页加入路由后侧边栏菜单为空的问题；菜单改为查找包含子路由的主布局路由，而不是固定读取 `routes[0]`。
+- 2026-04-25 15:59：修复 Vercel 线上前端后端地址配置链路；前端优先读取 `VITE_API_BASE_URL` 直连公网后端，Cloudflare 隧道同步脚本同时写入 `VITE_API_BASE_URL`、`BACKEND_API_BASE_URL` 和 `VITE_SIGNALR_BASE_URL`。
 
 # Files Changed
 

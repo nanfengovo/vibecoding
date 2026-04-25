@@ -37,18 +37,13 @@ if (DEMO_MODE) {
 }
 
 function resolveApiBaseUrl(): string {
-  const isVercelRuntime = typeof window !== 'undefined' && /(?:^|\.)vercel\.app$/i.test(window.location.hostname)
-  if (isVercelRuntime) {
-    return '/api'
-  }
-
   const rawValue = String(import.meta.env.VITE_API_BASE_URL || '').trim()
-  if (!rawValue) {
-    return '/api'
+  if (rawValue) {
+    const normalized = rawValue.replace(/\/+$/, '')
+    return normalized.endsWith('/api') ? normalized : `${normalized}/api`
   }
 
-  const normalized = rawValue.replace(/\/+$/, '')
-  return normalized.endsWith('/api') ? normalized : `${normalized}/api`
+  return '/api'
 }
 
 const api: AxiosInstance = axios.create({

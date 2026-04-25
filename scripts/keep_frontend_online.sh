@@ -73,6 +73,9 @@ sync_vercel_env_and_redeploy() {
   vercel env rm BACKEND_API_BASE_URL production --yes >/dev/null 2>&1 || true
   vercel env add BACKEND_API_BASE_URL production --value "$tunnel_url" --no-sensitive --yes >/dev/null
 
+  vercel env rm VITE_API_BASE_URL production --yes >/dev/null 2>&1 || true
+  vercel env add VITE_API_BASE_URL production --value "$tunnel_url" --no-sensitive --yes >/dev/null
+
   vercel env rm VITE_SIGNALR_BASE_URL production --yes >/dev/null 2>&1 || true
   vercel env add VITE_SIGNALR_BASE_URL production --value "$tunnel_url" --no-sensitive --yes >/dev/null
 
