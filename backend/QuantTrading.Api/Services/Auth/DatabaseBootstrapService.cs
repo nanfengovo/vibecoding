@@ -6,6 +6,8 @@ namespace QuantTrading.Api.Services.Auth;
 
 public sealed class DatabaseBootstrapService
 {
+    private const string DefaultAdminPassword = "Admin@Test2026";
+
     private readonly QuantTradingDbContext _dbContext;
     private readonly IConfiguration _configuration;
     private readonly IPasswordService _passwordService;
@@ -53,22 +55,23 @@ public sealed class DatabaseBootstrapService
         var configuredUsername = (_configuration["Auth:AdminUsername"] ?? "admin").Trim();
         var username = string.IsNullOrWhiteSpace(configuredUsername) ? "admin" : configuredUsername;
         var configuredPassword = _configuration["Auth:AdminPassword"];
+        var effectivePassword = configuredPassword;
+        if (string.IsNullOrWhiteSpace(effectivePassword))
+        {
+            effectivePassword = DefaultAdminPassword;
+            _logger.LogWarning("Auth:AdminPassword is not configured. Falling back to default admin password for user {Username}. Please override Auth:AdminPassword in production.", username);
+        }
         var existingAdmin = await _dbContext.AppUsers
             .OrderBy(u => u.Id)
             .FirstOrDefaultAsync(u => u.Role == UserRoles.Admin, cancellationToken);
 
         if (existingAdmin != null)
         {
-            await SyncConfiguredAdminCredentialsAsync(existingAdmin, username, configuredPassword, cancellationToken);
+            await SyncConfiguredAdminCredentialsAsync(existingAdmin, username, effectivePassword, cancellationToken);
             return existingAdmin;
         }
 
-        var password = configuredPassword;
-        if (string.IsNullOrWhiteSpace(password))
-        {
-            password = $"QT-{Guid.NewGuid():N}";
-            _logger.LogWarning("Auth:AdminPassword is not configured. Temporary bootstrap admin password for user {Username}: {Password}", username, password);
-        }
+        var password = effectivePassword;
 
         var admin = new AppUser
         {
