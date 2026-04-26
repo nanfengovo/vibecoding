@@ -59,6 +59,16 @@ public sealed class AiChatInput
     public IReadOnlyList<string> ConversationContext { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> MemoryContext { get; init; } = Array.Empty<string>();
     public IReadOnlyList<AiKnowledgeReference> KnowledgeContext { get; init; } = Array.Empty<AiKnowledgeReference>();
+    public AiReaderContext? ReaderContext { get; init; }
+}
+
+public sealed class AiReaderContext
+{
+    public long BookId { get; init; }
+    public string Title { get; init; } = string.Empty;
+    public string Format { get; init; } = string.Empty;
+    public string Locator { get; init; } = string.Empty;
+    public string SelectedText { get; init; } = string.Empty;
 }
 
 public sealed class AiChatResult
@@ -99,6 +109,10 @@ public sealed class AiPromptOptimizeInput
     public string Symbol { get; init; } = string.Empty;
     public string ProviderId { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
+    public string Scene { get; init; } = string.Empty;
+    public string ContextText { get; init; } = string.Empty;
+    public long? KnowledgeBaseId { get; init; }
+    public AiReaderContext? ReaderContext { get; init; }
 }
 
 public sealed class AiPromptOptimizeResult

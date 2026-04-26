@@ -34,6 +34,9 @@ public class QuantTradingDbContext : DbContext
     public DbSet<KnowledgeBase> KnowledgeBases { get; set; } = null!;
     public DbSet<KnowledgeDocument> KnowledgeDocuments { get; set; } = null!;
     public DbSet<KnowledgeChunk> KnowledgeChunks { get; set; } = null!;
+    public DbSet<ReaderBook> ReaderBooks { get; set; } = null!;
+    public DbSet<ReaderProgress> ReaderProgresses { get; set; } = null!;
+    public DbSet<ReaderHighlight> ReaderHighlights { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -99,6 +102,18 @@ public class QuantTradingDbContext : DbContext
         modelBuilder.Entity<AiMemoryRecord>()
             .HasIndex(m => new { m.UserId, m.IsArchived, m.UpdatedAt });
 
+        modelBuilder.Entity<AiMemoryRecord>()
+            .HasIndex(m => new { m.UserId, m.SourceType, m.UpdatedAt });
+
+        modelBuilder.Entity<AiMemoryRecord>()
+            .HasIndex(m => new { m.UserId, m.KnowledgeBaseId, m.UpdatedAt });
+
+        modelBuilder.Entity<AiMemoryRecord>()
+            .HasIndex(m => new { m.UserId, m.SourceRef });
+
+        modelBuilder.Entity<AiMemoryRecord>()
+            .HasIndex(m => new { m.UserId, m.KnowledgeDocumentId, m.UpdatedAt });
+
         modelBuilder.Entity<CrawlerSource>()
             .HasIndex(s => new { s.UserId, s.IsEnabled });
 
@@ -113,6 +128,19 @@ public class QuantTradingDbContext : DbContext
 
         modelBuilder.Entity<KnowledgeChunk>()
             .HasIndex(c => new { c.KnowledgeBaseId, c.DocumentId, c.ChunkIndex });
+
+        modelBuilder.Entity<ReaderBook>()
+            .HasIndex(b => new { b.UserId, b.UpdatedAt });
+
+        modelBuilder.Entity<ReaderBook>()
+            .HasIndex(b => new { b.UserId, b.ContentHash });
+
+        modelBuilder.Entity<ReaderProgress>()
+            .HasIndex(p => new { p.UserId, p.BookId })
+            .IsUnique();
+
+        modelBuilder.Entity<ReaderHighlight>()
+            .HasIndex(h => new { h.UserId, h.BookId, h.CreatedAt });
 
         // Seed initial system configs
         modelBuilder.Entity<SystemConfig>().HasData(
@@ -213,6 +241,15 @@ public class QuantTradingDbContext : DbContext
             .HasColumnType("text");
         modelBuilder.Entity<KnowledgeChunk>()
             .Property(item => item.Content)
+            .HasColumnType("text");
+        modelBuilder.Entity<ReaderBook>()
+            .Property(item => item.Markdown)
+            .HasColumnType("text");
+        modelBuilder.Entity<ReaderHighlight>()
+            .Property(item => item.SelectedText)
+            .HasColumnType("text");
+        modelBuilder.Entity<ReaderHighlight>()
+            .Property(item => item.Note)
             .HasColumnType("text");
     }
 }

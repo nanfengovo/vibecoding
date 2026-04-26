@@ -92,6 +92,30 @@ public class AiMemoryRecord
 
     public int Priority { get; set; } = 1;
 
+    [StringLength(60)]
+    public string SourceType { get; set; } = string.Empty;
+
+    [StringLength(1000)]
+    public string SourceUrl { get; set; } = string.Empty;
+
+    [StringLength(200)]
+    public string SourceRef { get; set; } = string.Empty;
+
+    public long? KnowledgeBaseId { get; set; }
+
+    public long? KnowledgeDocumentId { get; set; }
+
+    [StringLength(120)]
+    public string ProviderId { get; set; } = string.Empty;
+
+    [StringLength(200)]
+    public string Model { get; set; } = string.Empty;
+
+    [StringLength(40)]
+    public string SyncStatus { get; set; } = "pending";
+
+    public DateTime? LastSyncedAt { get; set; }
+
     public bool IsArchived { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

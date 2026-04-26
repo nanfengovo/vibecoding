@@ -117,6 +117,15 @@
                 v-if="item.role === 'assistant'"
                 link
                 size="small"
+                :loading="isSavingMemory(item.id)"
+                @click="saveAssistantMemory(item)"
+              >
+                保存记忆
+              </el-button>
+              <el-button
+                v-if="item.role === 'assistant'"
+                link
+                size="small"
                 class="render-toggle"
                 @click="toggleRawMode(item.id)"
               >
@@ -182,14 +191,21 @@ import dayjs from 'dayjs'
 import { Delete, MagicStick, Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { aiApi, configApi } from '@/api'
-import type { AiChatMarketContext, AiProviderConfig, SystemConfig } from '@/types'
+import type { AiChatMarketContext, AiProviderConfig } from '@/types'
 import { useAiChatStore } from '@/stores/aiChat'
+import type { AiChatMessage } from '@/stores/aiChat'
 import { parseAiMarkdown } from '@/utils/aiMarkdown'
+import {
+  createAiProvider,
+  normalizeAiProviders,
+  parseModelCandidates
+} from '@/lib/ai/providerModel'
 
 const chatStore = useAiChatStore()
 const providers = ref<AiProviderConfig[]>([])
 const defaultProviderId = ref('')
 const rawModeMap = ref<Record<string, boolean>>({})
+const savingMemoryMap = ref<Record<string, boolean>>({})
 const messageListRef = ref<HTMLElement | null>(null)
 const optimizing = ref(false)
 
@@ -268,43 +284,6 @@ const renderedMessageMap = computed<Record<string, string>>(() => {
   return rows
 })
 
-function parseModelCandidates(raw: string): string[] {
-  const list = String(raw || '')
-    .split(/[\n,;|]+/g)
-    .map((item) => item.trim())
-    .filter(Boolean)
-  return Array.from(new Set(list))
-}
-
-function createProvider(seed?: Partial<AiProviderConfig>, index = 0): AiProviderConfig {
-  return {
-    id: String(seed?.id || `provider-${index + 1}`),
-    name: String(seed?.name || `模型源 ${index + 1}`),
-    apiKey: String(seed?.apiKey || ''),
-    baseUrl: String(seed?.baseUrl || '').trim() || 'https://api.openai.com/v1',
-    model: String(seed?.model || '').trim() || 'gpt-5-mini'
-  }
-}
-
-function normalizeProviders(openAi?: SystemConfig['openAi']): AiProviderConfig[] {
-  const rows = Array.isArray(openAi?.providers)
-    ? openAi.providers.map((item, index) => createProvider(item, index))
-    : []
-  if (rows.length > 0) {
-    return rows
-  }
-
-  return [
-    createProvider({
-      id: 'default',
-      name: '默认模型源',
-      apiKey: String(openAi?.apiKey || ''),
-      baseUrl: String(openAi?.baseUrl || '').trim() || 'https://api.openai.com/v1',
-      model: String(openAi?.model || '').trim() || 'gpt-5-mini'
-    })
-  ]
-}
-
 function ensureSessionDefaults() {
   const session = activeSession.value
   if (!session || providers.value.length === 0) {
@@ -330,13 +309,13 @@ function ensureSessionDefaults() {
 async function loadProviders() {
   try {
     const config = await configApi.get()
-    const rows = normalizeProviders(config?.openAi)
+    const rows = normalizeAiProviders(config?.openAi)
     providers.value = rows
     const preferred = String(config?.openAi?.activeProviderId || '').trim()
     defaultProviderId.value = rows.some((item) => item.id === preferred) ? preferred : (rows[0]?.id || '')
     ensureSessionDefaults()
   } catch {
-    providers.value = [createProvider(undefined, 0)]
+    providers.value = [createAiProvider(undefined, 0)]
     defaultProviderId.value = providers.value[0].id
     ensureSessionDefaults()
   }
@@ -412,6 +391,50 @@ function toggleRawMode(messageId: string) {
   rawModeMap.value = {
     ...rawModeMap.value,
     [messageId]: !rawModeMap.value[messageId]
+  }
+}
+
+function isSavingMemory(messageId: string) {
+  return Boolean(savingMemoryMap.value[messageId])
+}
+
+async function saveAssistantMemory(item: AiChatMessage) {
+  if (item.role !== 'assistant' || !String(item.content || '').trim()) {
+    ElMessage.warning('当前消息没有可保存内容')
+    return
+  }
+
+  const messageId = String(item.id || '')
+  if (isSavingMemory(messageId)) {
+    return
+  }
+
+  savingMemoryMap.value = {
+    ...savingMemoryMap.value,
+    [messageId]: true
+  }
+
+  try {
+    await aiApi.createMemory({
+      type: 'ai_chat',
+      title: `AI Chat：${activeSession.value?.title || '会话消息'}`,
+      content: String(item.content || '').trim(),
+      symbol: symbol.value || undefined,
+      tags: 'ai_chat',
+      priority: 2,
+      sourceType: 'ai_chat',
+      sourceRef: `session:${activeSessionId.value || ''}:message:${messageId}`,
+      providerId: selectedProviderId.value || undefined,
+      model: item.model || selectedModel.value || undefined
+    })
+    ElMessage.success('已保存为记忆')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '保存记忆失败')
+  } finally {
+    savingMemoryMap.value = {
+      ...savingMemoryMap.value,
+      [messageId]: false
+    }
   }
 }
 

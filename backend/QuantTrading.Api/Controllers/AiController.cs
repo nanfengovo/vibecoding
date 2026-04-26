@@ -21,19 +21,22 @@ public class AiController : ControllerBase
     private readonly QuantTradingDbContext _dbContext;
     private readonly ICurrentUserService _currentUser;
     private readonly IKnowledgeService _knowledgeService;
+    private readonly ILogger<AiController> _logger;
 
     public AiController(
         IAiAnalysisService aiAnalysisService,
         ILongBridgeService longBridgeService,
         QuantTradingDbContext dbContext,
         ICurrentUserService currentUser,
-        IKnowledgeService knowledgeService)
+        IKnowledgeService knowledgeService,
+        ILogger<AiController> logger)
     {
         _aiAnalysisService = aiAnalysisService;
         _longBridgeService = longBridgeService;
         _dbContext = dbContext;
         _currentUser = currentUser;
         _knowledgeService = knowledgeService;
+        _logger = logger;
     }
 
     [HttpPost("analyze/stock/{symbol}")]
@@ -134,7 +137,17 @@ public class AiController : ControllerBase
                     Model = request.Model ?? string.Empty,
                     ConversationContext = conversationContext,
                     MemoryContext = memoryContext,
-                    KnowledgeContext = knowledgeContext
+                    KnowledgeContext = knowledgeContext,
+                    ReaderContext = request.ReaderContext == null
+                        ? null
+                        : new AiReaderContext
+                        {
+                            BookId = request.ReaderContext.BookId,
+                            Title = request.ReaderContext.Title ?? string.Empty,
+                            Format = request.ReaderContext.Format ?? string.Empty,
+                            Locator = request.ReaderContext.Locator ?? string.Empty,
+                            SelectedText = request.ReaderContext.SelectedText ?? string.Empty
+                        }
                 },
                 cancellationToken);
 
@@ -193,7 +206,20 @@ public class AiController : ControllerBase
                     Question = request.Question,
                     Symbol = request.Symbol ?? string.Empty,
                     ProviderId = request.ProviderId ?? string.Empty,
-                    Model = request.Model ?? string.Empty
+                    Model = request.Model ?? string.Empty,
+                    Scene = request.Scene ?? string.Empty,
+                    ContextText = request.ContextText ?? string.Empty,
+                    KnowledgeBaseId = request.KnowledgeBaseId,
+                    ReaderContext = request.ReaderContext == null
+                        ? null
+                        : new AiReaderContext
+                        {
+                            BookId = request.ReaderContext.BookId,
+                            Title = request.ReaderContext.Title ?? string.Empty,
+                            Format = request.ReaderContext.Format ?? string.Empty,
+                            Locator = request.ReaderContext.Locator ?? string.Empty,
+                            SelectedText = request.ReaderContext.SelectedText ?? string.Empty
+                        }
                 },
                 cancellationToken);
 
@@ -300,21 +326,74 @@ public class AiController : ControllerBase
     }
 
     [HttpGet("memories")]
-    public async Task<ActionResult<List<AiMemoryRecord>>> ListMemories(CancellationToken cancellationToken)
+    public async Task<ActionResult<AiMemoryListResultDto>> ListMemories([FromQuery] AiMemoryListQueryRequest request, CancellationToken cancellationToken)
     {
         var userId = await _currentUser.GetEffectiveUserIdAsync(cancellationToken);
-        return Ok(await _dbContext.AiMemories
-            .Where(item => item.UserId == userId && !item.IsArchived)
+        var page = request.Page <= 0 ? 1 : request.Page;
+        var pageSize = request.PageSize switch
+        {
+            <= 0 => 20,
+            > 200 => 200,
+            _ => request.PageSize
+        };
+
+        var query = _dbContext.AiMemories
+            .AsNoTracking()
+            .Where(item => item.UserId == userId && !item.IsArchived);
+
+        if (!string.IsNullOrWhiteSpace(request.Type))
+        {
+            var normalized = request.Type.Trim();
+            query = query.Where(item => item.Type == normalized);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.SourceType))
+        {
+            var normalized = request.SourceType.Trim();
+            query = query.Where(item => item.SourceType == normalized);
+        }
+
+        if (request.KnowledgeBaseId.HasValue && request.KnowledgeBaseId.Value > 0)
+        {
+            query = query.Where(item => item.KnowledgeBaseId == request.KnowledgeBaseId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Query))
+        {
+            var keyword = request.Query.Trim();
+            var like = $"%{keyword}%";
+            query = query.Where(item =>
+                EF.Functions.Like(item.Title, like)
+                || EF.Functions.Like(item.Content, like)
+                || EF.Functions.Like(item.Tags, like)
+                || EF.Functions.Like(item.SourceType, like)
+                || EF.Functions.Like(item.SourceRef, like)
+                || EF.Functions.Like(item.SourceUrl, like));
+        }
+
+        var total = await query.CountAsync(cancellationToken);
+        var items = await query
             .OrderByDescending(item => item.Priority)
             .ThenByDescending(item => item.UpdatedAt)
-            .ToListAsync(cancellationToken));
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return Ok(new AiMemoryListResultDto
+        {
+            Items = items,
+            Total = total,
+            Page = page,
+            PageSize = pageSize
+        });
     }
 
     [HttpPost("memories")]
-    public async Task<ActionResult<AiMemoryRecord>> CreateMemory([FromBody] AiMemoryRecord request, CancellationToken cancellationToken)
+    public async Task<ActionResult<AiMemoryRecord>> CreateMemory([FromBody] AiMemoryUpsertRequest request, CancellationToken cancellationToken)
     {
         var userId = await _currentUser.GetEffectiveUserIdAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(request.Content))
+        var content = (request.Content ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(content))
         {
             return BadRequest(new { message = "记忆内容不能为空。" });
         }
@@ -324,15 +403,147 @@ public class AiController : ControllerBase
             UserId = userId,
             Type = string.IsNullOrWhiteSpace(request.Type) ? "manual" : request.Type.Trim(),
             Title = request.Title?.Trim() ?? string.Empty,
-            Content = request.Content.Trim(),
+            Content = content,
             Symbol = request.Symbol?.Trim().ToUpperInvariant() ?? string.Empty,
             Tags = request.Tags?.Trim() ?? string.Empty,
-            Priority = request.Priority <= 0 ? 1 : request.Priority,
+            Priority = request.Priority is > 0 ? request.Priority.Value : 1,
+            SourceType = request.SourceType?.Trim() ?? string.Empty,
+            SourceUrl = request.SourceUrl?.Trim() ?? string.Empty,
+            SourceRef = request.SourceRef?.Trim() ?? string.Empty,
+            KnowledgeBaseId = request.KnowledgeBaseId,
+            KnowledgeDocumentId = request.KnowledgeDocumentId,
+            ProviderId = request.ProviderId?.Trim() ?? string.Empty,
+            Model = request.Model?.Trim() ?? string.Empty,
+            SyncStatus = "pending",
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
+
         _dbContext.AiMemories.Add(memory);
         await _dbContext.SaveChangesAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(memory.SourceRef))
+        {
+            memory.SourceRef = $"memory:{memory.Id}";
+            memory.UpdatedAt = DateTime.UtcNow;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        await TrySyncMemoryAsync(userId, memory, request.AutoSync != false, cancellationToken);
+        return Ok(memory);
+    }
+
+    [HttpPut("memories/{id:long}")]
+    public async Task<ActionResult<AiMemoryRecord>> UpdateMemory(
+        long id,
+        [FromBody] AiMemoryUpsertRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userId = await _currentUser.GetEffectiveUserIdAsync(cancellationToken);
+        var memory = await _dbContext.AiMemories
+            .FirstOrDefaultAsync(item => item.UserId == userId && item.Id == id && !item.IsArchived, cancellationToken);
+        if (memory == null)
+        {
+            return NotFound();
+        }
+
+        if (request.Type != null)
+        {
+            memory.Type = string.IsNullOrWhiteSpace(request.Type) ? memory.Type : request.Type.Trim();
+        }
+
+        if (request.Title != null)
+        {
+            memory.Title = request.Title.Trim();
+        }
+
+        if (request.Content != null)
+        {
+            var content = request.Content.Trim();
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return BadRequest(new { message = "记忆内容不能为空。" });
+            }
+
+            memory.Content = content;
+        }
+
+        if (request.Symbol != null)
+        {
+            memory.Symbol = request.Symbol.Trim().ToUpperInvariant();
+        }
+
+        if (request.Tags != null)
+        {
+            memory.Tags = request.Tags.Trim();
+        }
+
+        if (request.Priority.HasValue)
+        {
+            memory.Priority = request.Priority.Value <= 0 ? 1 : request.Priority.Value;
+        }
+
+        if (request.SourceType != null)
+        {
+            memory.SourceType = request.SourceType.Trim();
+        }
+
+        if (request.SourceUrl != null)
+        {
+            memory.SourceUrl = request.SourceUrl.Trim();
+        }
+
+        if (request.SourceRef != null)
+        {
+            memory.SourceRef = request.SourceRef.Trim();
+        }
+
+        if (request.KnowledgeBaseId.HasValue)
+        {
+            memory.KnowledgeBaseId = request.KnowledgeBaseId;
+        }
+
+        if (request.KnowledgeDocumentId.HasValue)
+        {
+            memory.KnowledgeDocumentId = request.KnowledgeDocumentId;
+        }
+
+        if (request.ProviderId != null)
+        {
+            memory.ProviderId = request.ProviderId.Trim();
+        }
+
+        if (request.Model != null)
+        {
+            memory.Model = request.Model.Trim();
+        }
+
+        memory.UpdatedAt = DateTime.UtcNow;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(memory.SourceRef))
+        {
+            memory.SourceRef = $"memory:{memory.Id}";
+            memory.UpdatedAt = DateTime.UtcNow;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        await TrySyncMemoryAsync(userId, memory, request.AutoSync != false, cancellationToken);
+        return Ok(memory);
+    }
+
+    [HttpPost("memories/{id:long}/sync")]
+    public async Task<ActionResult<AiMemoryRecord>> SyncMemory(long id, CancellationToken cancellationToken)
+    {
+        var userId = await _currentUser.GetEffectiveUserIdAsync(cancellationToken);
+        var memory = await _dbContext.AiMemories
+            .FirstOrDefaultAsync(item => item.UserId == userId && item.Id == id && !item.IsArchived, cancellationToken);
+        if (memory == null)
+        {
+            return NotFound();
+        }
+
+        await TrySyncMemoryAsync(userId, memory, shouldSync: true, cancellationToken);
         return Ok(memory);
     }
 
@@ -347,6 +558,7 @@ public class AiController : ControllerBase
         }
 
         memory.IsArchived = true;
+        memory.SyncStatus = "archived";
         memory.UpdatedAt = DateTime.UtcNow;
         await _dbContext.SaveChangesAsync(cancellationToken);
         return NoContent();
@@ -401,7 +613,7 @@ public class AiController : ControllerBase
             .Where(item => item.UserId == userId && !item.IsArchived)
             .OrderByDescending(item => item.Priority)
             .ThenByDescending(item => item.UpdatedAt)
-            .Take(20)
+            .Take(30)
             .ToListAsync(cancellationToken);
 
         return memories
@@ -409,10 +621,42 @@ public class AiController : ControllerBase
                 || string.IsNullOrWhiteSpace(normalizedSymbol)
                 || item.Symbol.Equals(normalizedSymbol, StringComparison.OrdinalIgnoreCase)
                 || question.Contains(item.Symbol, StringComparison.OrdinalIgnoreCase))
-            .Take(8)
-            .Select(item => $"{item.Title} {item.Content}".Trim())
+            .Select(item =>
+            {
+                var title = TrimContext(item.Title, 80);
+                var body = TrimContext(item.Content, 520);
+                return string.IsNullOrWhiteSpace(title) ? body : $"{title} {body}".Trim();
+            })
             .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Take(8)
             .ToList();
+    }
+
+    private async Task TrySyncMemoryAsync(int userId, AiMemoryRecord memory, bool shouldSync, CancellationToken cancellationToken)
+    {
+        if (!shouldSync)
+        {
+            if (string.IsNullOrWhiteSpace(memory.SyncStatus))
+            {
+                memory.SyncStatus = "pending";
+                memory.UpdatedAt = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+            return;
+        }
+
+        try
+        {
+            await _knowledgeService.SyncMemoryToKnowledgeAsync(userId, memory, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            memory.SyncStatus = "failed";
+            memory.LastSyncedAt = DateTime.UtcNow;
+            memory.UpdatedAt = DateTime.UtcNow;
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            _logger.LogWarning(ex, "Failed to sync memory {MemoryId} for user {UserId}", memory.Id, userId);
+        }
     }
 
     private async Task UpsertHeuristicMemoryAsync(int userId, string question, string answer, string? symbol, CancellationToken cancellationToken)
@@ -442,6 +686,9 @@ public class AiController : ControllerBase
             Symbol = symbol?.Trim().ToUpperInvariant() ?? string.Empty,
             Tags = "auto",
             Priority = 2,
+            SourceType = "ai_chat_auto",
+            SourceRef = $"auto:{DateTime.UtcNow:yyyyMMddHHmmssfff}",
+            SyncStatus = "pending",
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         });
@@ -487,6 +734,16 @@ public sealed class AiChatRequest
     public long? SessionId { get; set; }
     public long? KnowledgeBaseId { get; set; }
     public bool? UseMemory { get; set; }
+    public AiReaderContextRequest? ReaderContext { get; set; }
+}
+
+public sealed class AiReaderContextRequest
+{
+    public long BookId { get; set; }
+    public string? Title { get; set; }
+    public string? Format { get; set; }
+    public string? Locator { get; set; }
+    public string? SelectedText { get; set; }
 }
 
 public sealed class AiChatSessionCreateRequest
@@ -569,12 +826,52 @@ public sealed class AiChatMessageDto
     }
 }
 
+public sealed class AiMemoryListQueryRequest
+{
+    public string? Type { get; set; }
+    public string? SourceType { get; set; }
+    public long? KnowledgeBaseId { get; set; }
+    public string? Query { get; set; }
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 20;
+}
+
+public sealed class AiMemoryListResultDto
+{
+    public List<AiMemoryRecord> Items { get; init; } = new();
+    public int Total { get; init; }
+    public int Page { get; init; }
+    public int PageSize { get; init; }
+}
+
+public sealed class AiMemoryUpsertRequest
+{
+    public string? Type { get; set; }
+    public string? Title { get; set; }
+    public string? Content { get; set; }
+    public string? Symbol { get; set; }
+    public string? Tags { get; set; }
+    public int? Priority { get; set; }
+    public string? SourceType { get; set; }
+    public string? SourceUrl { get; set; }
+    public string? SourceRef { get; set; }
+    public long? KnowledgeBaseId { get; set; }
+    public long? KnowledgeDocumentId { get; set; }
+    public string? ProviderId { get; set; }
+    public string? Model { get; set; }
+    public bool? AutoSync { get; set; }
+}
+
 public sealed class AiPromptOptimizeRequest
 {
     public string Question { get; set; } = string.Empty;
     public string? Symbol { get; set; }
     public string? ProviderId { get; set; }
     public string? Model { get; set; }
+    public string? Scene { get; set; }
+    public string? ContextText { get; set; }
+    public long? KnowledgeBaseId { get; set; }
+    public AiReaderContextRequest? ReaderContext { get; set; }
 }
 
 public sealed class AiModelsRequest

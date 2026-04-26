@@ -294,6 +294,14 @@ export interface AiChatResult {
   references?: AiKnowledgeReference[]
 }
 
+export interface AiChatReaderContext {
+  bookId: number
+  title: string
+  format: string
+  locator: string
+  selectedText: string
+}
+
 export interface AiChatMarketContext {
   symbol: string
   market: string
@@ -382,8 +390,24 @@ export interface AiMemoryRecord {
   symbol: string
   tags: string
   priority: number
+  sourceType: string
+  sourceUrl: string
+  sourceRef: string
+  knowledgeBaseId?: number | null
+  knowledgeDocumentId?: number | null
+  providerId: string
+  model: string
+  syncStatus: string
+  lastSyncedAt?: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface AiMemoryListResult {
+  items: AiMemoryRecord[]
+  total: number
+  page: number
+  pageSize: number
 }
 
 export interface AiKnowledgeReference {
@@ -449,6 +473,45 @@ export interface KnowledgeDocument {
   sourceUrl: string
   sourceType: string
   markdown: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ReaderBook {
+  id: number
+  title: string
+  author: string
+  format: 'EPUB' | 'PDF' | 'MD' | string
+  sourceType: 'upload' | 'crawler' | string
+  sourceRef: string
+  contentHash: string
+  fileName: string
+  storagePath: string
+  fileSize: number
+  markdown: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ReaderProgress {
+  id: number
+  bookId: number
+  locator: string
+  chapterTitle: string
+  pageNumber?: number | null
+  percentage?: number | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ReaderHighlight {
+  id: number
+  bookId: number
+  locator: string
+  chapterTitle: string
+  selectedText: string
+  note: string
+  color: string
   createdAt: string
   updatedAt: string
 }

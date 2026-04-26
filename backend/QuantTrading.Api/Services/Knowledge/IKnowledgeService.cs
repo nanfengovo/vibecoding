@@ -12,4 +12,7 @@ public interface IKnowledgeService
     Task<KnowledgeDocument> ImportMarkdownAsync(int userId, long knowledgeBaseId, string title, string markdown, string sourceUrl, string sourceType, CancellationToken cancellationToken = default);
     Task<KnowledgeDocument?> GetDocumentAsync(int userId, long knowledgeBaseId, long documentId, CancellationToken cancellationToken = default);
     Task<List<AiKnowledgeReference>> SearchAsync(int userId, long knowledgeBaseId, string query, int limit = 6, CancellationToken cancellationToken = default);
+    Task<AiMemoryRecord> SyncMemoryToKnowledgeAsync(int userId, AiMemoryRecord memory, CancellationToken cancellationToken = default);
+    Task<AiMemoryRecord> SyncKnowledgeDocumentToMemoryAsync(int userId, KnowledgeDocument document, CancellationToken cancellationToken = default);
+    Task<KnowledgeBase> EnsureDefaultKnowledgeBaseAsync(int userId, CancellationToken cancellationToken = default);
 }

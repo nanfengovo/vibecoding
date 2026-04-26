@@ -62,7 +62,29 @@
           <div class="section-title">知识库 AI</div>
           <div class="chat-row">
             <el-input v-model="question" placeholder="只基于当前知识库提问" @keydown.enter.prevent="ask" />
+          </div>
+          <div class="chat-actions top-gap">
+            <el-select v-model="selectedProviderId" placeholder="模型源" style="width: 180px">
+              <el-option
+                v-for="provider in aiProviders"
+                :key="provider.id"
+                :label="provider.name"
+                :value="provider.id"
+              />
+            </el-select>
+            <el-select v-model="selectedModel" placeholder="模型" style="width: 200px">
+              <el-option
+                v-for="model in modelOptions"
+                :key="model"
+                :label="model"
+                :value="model"
+              />
+            </el-select>
+            <el-button :loading="optimizingPrompt" :disabled="!question.trim()" @click="optimizeQuestion">
+              优化提示词
+            </el-button>
             <el-button type="primary" :loading="asking" :disabled="!activeKbId" @click="ask">提问</el-button>
+            <el-button :disabled="!answer.trim()" @click="saveAnswerAsMemory">保存为记忆</el-button>
           </div>
           <div v-if="answer" class="answer" v-html="answerHtml" />
           <div v-if="references.length" class="references">
@@ -93,29 +115,56 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { crawlerApi, knowledgeApi } from '@/api'
-import type { AiKnowledgeReference, CrawlerDocument, KnowledgeBase, KnowledgeDocument } from '@/types'
+import { aiApi, configApi, crawlerApi, knowledgeApi } from '@/api'
+import type { AiKnowledgeReference, AiProviderConfig, CrawlerDocument, KnowledgeBase, KnowledgeDocument } from '@/types'
 import { parseAiMarkdown } from '@/utils/aiMarkdown'
+import { normalizeAiProviders, parseModelCandidates, resolvePreferredProviderId } from '@/lib/ai/providerModel'
 
 const knowledgeBases = ref<KnowledgeBase[]>([])
+const route = useRoute()
 const documents = ref<KnowledgeDocument[]>([])
 const crawlerDocs = ref<CrawlerDocument[]>([])
 const activeKbId = ref<number | null>(null)
 const selectedDoc = ref<KnowledgeDocument | null>(null)
 const kbDialogVisible = ref(false)
 const asking = ref(false)
+const optimizingPrompt = ref(false)
 const question = ref('')
 const answer = ref('')
 const references = ref<AiKnowledgeReference[]>([])
+const aiProviders = ref<AiProviderConfig[]>([])
+const selectedProviderId = ref('')
+const selectedModel = ref('')
 const kbForm = reactive({ name: '', description: '' })
 const importForm = reactive({ title: '', markdown: '' })
 
 const answerHtml = computed(() => parseAiMarkdown(answer.value || '', 'kb-answer').html)
+const currentProvider = computed(() =>
+  aiProviders.value.find((item) => item.id === selectedProviderId.value) || aiProviders.value[0] || null
+)
+const modelOptions = computed(() => {
+  const list = parseModelCandidates(currentProvider.value?.model || '')
+  return list.length > 0 ? list : ['gpt-5-mini']
+})
+
+watch(currentProvider, () => {
+  if (!modelOptions.value.includes(selectedModel.value)) {
+    selectedModel.value = modelOptions.value[0] || 'gpt-5-mini'
+  }
+})
 
 async function loadKbs() {
   knowledgeBases.value = await knowledgeApi.list()
+  const queryKbId = Number(route.query.kb)
+  const preferredKb = Number.isFinite(queryKbId) && queryKbId > 0
+    ? knowledgeBases.value.find((item) => item.id === queryKbId)
+    : null
+  if (preferredKb) {
+    activeKbId.value = preferredKb.id
+  }
   if (!activeKbId.value && knowledgeBases.value.length) {
     activeKbId.value = knowledgeBases.value[0].id
   }
@@ -203,15 +252,104 @@ async function ask() {
   }
   asking.value = true
   try {
-    const result = await knowledgeApi.chat(activeKbId.value, { question: question.value.trim() })
+    const result = await knowledgeApi.chat(activeKbId.value, {
+      question: question.value.trim(),
+      providerId: selectedProviderId.value || undefined,
+      model: selectedModel.value || undefined
+    })
     answer.value = result.content
     references.value = result.references || []
+    if (result.model) {
+      selectedModel.value = result.model
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '知识库问答失败')
   } finally {
     asking.value = false
   }
 }
 
+async function optimizeQuestion() {
+  const ask = question.value.trim()
+  if (!ask) {
+    ElMessage.warning('请先输入问题')
+    return
+  }
+  if (optimizingPrompt.value) {
+    return
+  }
+
+  optimizingPrompt.value = true
+  try {
+    const contextText = selectedDoc.value?.markdown
+      ? selectedDoc.value.markdown.slice(0, 2400)
+      : undefined
+    const result = await aiApi.optimizePrompt({
+      question: ask,
+      providerId: selectedProviderId.value || undefined,
+      model: selectedModel.value || undefined,
+      scene: 'knowledge',
+      contextText,
+      knowledgeBaseId: activeKbId.value || undefined
+    })
+    const optimized = String(result?.optimizedPrompt || '').trim()
+    if (!optimized) {
+      throw new Error('优化结果为空')
+    }
+    question.value = optimized
+    ElMessage.success('提示词已优化')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || error?.message || '提示词优化失败')
+  } finally {
+    optimizingPrompt.value = false
+  }
+}
+
+async function saveAnswerAsMemory() {
+  if (!answer.value.trim()) {
+    ElMessage.warning('暂无可保存的 AI 回答')
+    return
+  }
+
+  try {
+    await aiApi.createMemory({
+      type: 'knowledge_answer',
+      title: `知识库问答：${question.value.trim().slice(0, 32) || '未命名问题'}`,
+      content: answer.value.trim(),
+      tags: 'knowledge,ai_answer',
+      priority: 2,
+      sourceType: 'knowledge_ai',
+      sourceUrl: activeKbId.value ? `knowledge://base/${activeKbId.value}` : '',
+      sourceRef: activeKbId.value
+        ? `knowledge:${activeKbId.value}:q:${question.value.trim().slice(0, 80)}`
+        : `knowledge:q:${question.value.trim().slice(0, 80)}`,
+      providerId: selectedProviderId.value || undefined,
+      model: selectedModel.value || undefined,
+      knowledgeBaseId: activeKbId.value || undefined
+    })
+    ElMessage.success('已保存到 AI 记忆')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '保存记忆失败')
+  }
+}
+
+async function loadAiProviders() {
+  try {
+    const config = await configApi.get()
+    aiProviders.value = normalizeAiProviders(config?.openAi)
+    selectedProviderId.value = resolvePreferredProviderId(aiProviders.value, config?.openAi?.activeProviderId)
+    if (!modelOptions.value.includes(selectedModel.value)) {
+      selectedModel.value = modelOptions.value[0] || 'gpt-5-mini'
+    }
+  } catch {
+    aiProviders.value = []
+    selectedProviderId.value = ''
+    selectedModel.value = 'gpt-5-mini'
+  }
+}
+
 onMounted(async () => {
+  await loadAiProviders()
   await loadKbs()
   crawlerDocs.value = await crawlerApi.listDocuments()
 })
@@ -262,8 +400,19 @@ onMounted(async () => {
 
 .chat-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+}
+
+.chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.top-gap {
+  margin-top: 10px;
 }
 
 .answer {

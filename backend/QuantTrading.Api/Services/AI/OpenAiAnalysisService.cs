@@ -317,19 +317,42 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             throw new InvalidOperationException("待优化问题不能为空。");
         }
 
-        var systemPrompt = "你是专业交易提示词优化助手。你的任务是重写用户问题，让模型能更精准输出结构化交易分析。";
+        var scene = (input.Scene ?? string.Empty).Trim().ToLowerInvariant();
+        var sceneGuidance = BuildPromptSceneGuidance(scene);
+        var systemPrompt = "你是专业提示词优化助手。你的任务是重写用户问题，让模型在对应场景下输出更精准、结构化、可执行的回答。";
         var sb = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(input.Symbol))
         {
             sb.AppendLine($"标的：{input.Symbol.Trim().ToUpperInvariant()}");
         }
+        if (!string.IsNullOrWhiteSpace(sceneGuidance))
+        {
+            sb.AppendLine($"场景：{sceneGuidance}");
+        }
+        if (input.KnowledgeBaseId.HasValue && input.KnowledgeBaseId.Value > 0)
+        {
+            sb.AppendLine($"知识库：{input.KnowledgeBaseId.Value}");
+        }
+        if (input.ReaderContext != null)
+        {
+            sb.AppendLine("阅读器上下文：");
+            sb.AppendLine($"- 书籍：{input.ReaderContext.Title}");
+            sb.AppendLine($"- 格式：{input.ReaderContext.Format}");
+            sb.AppendLine($"- 定位：{input.ReaderContext.Locator}");
+            sb.AppendLine($"- 选中内容：{TrimForPrompt(input.ReaderContext.SelectedText, 1200)}");
+        }
+        if (!string.IsNullOrWhiteSpace(input.ContextText))
+        {
+            sb.AppendLine("补充上下文：");
+            sb.AppendLine(TrimForPrompt(input.ContextText, 1800));
+        }
         sb.AppendLine($"原始问题：{question}");
         sb.AppendLine();
         sb.AppendLine("请输出“优化后的最终提问”一段文本，不要解释，不要加标题，不要使用 markdown 代码块。");
         sb.AppendLine("要求：");
-        sb.AppendLine("1) 保留原问题意图，不改变交易方向。");
-        sb.AppendLine("2) 补充分析维度：趋势、关键价位、交易计划、风险控制。");
-        sb.AppendLine("3) 语气专业、简洁、可执行。");
+        sb.AppendLine("1) 保留原问题意图，不改变用户目标。");
+        sb.AppendLine("2) 结合给定场景补充分析维度、输出结构和约束。");
+        sb.AppendLine("3) 语气专业、简洁、可执行，避免空泛表述。");
 
         var modelOverride = (input.Model ?? string.Empty).Trim();
         var (success, content, error, modelUsed) = await SendChatCompletionAsync(
@@ -629,6 +652,29 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             .Trim();
 
         return content;
+    }
+
+    private static string BuildPromptSceneGuidance(string scene)
+    {
+        return scene switch
+        {
+            "reader" => "阅读器问答：结合选中段落，生成可直接用于解读与追问的提问语句，强调上下文引用与理解深度。",
+            "knowledge" => "知识库问答：优先要求基于知识库内容作答，必要时要求引用依据并标注不确定点。",
+            "stock_analysis" => "个股分析：强调趋势、关键价位、交易计划、风险控制与仓位管理。",
+            "ai_chat" => "通用 AI 聊天：在保持意图的基础上提升结构化和可执行性。",
+            _ => "通用场景：保持问题意图，增强结构化与可执行性。"
+        };
+    }
+
+    private static string TrimForPrompt(string value, int maxLength)
+    {
+        var clean = (value ?? string.Empty).Trim();
+        if (clean.Length <= maxLength)
+        {
+            return clean;
+        }
+
+        return $"{clean[..maxLength]}...";
     }
 
     private static List<string> ParseModels(string raw)
@@ -974,6 +1020,32 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
                 index++;
             }
             sb.AppendLine("若使用知识库片段，请在回答末尾列出“引用”。");
+            sb.AppendLine();
+        }
+
+        if (input.ReaderContext != null)
+        {
+            sb.AppendLine("阅读上下文（来自用户当前阅读器）：");
+            sb.AppendLine($"- 图书ID：{input.ReaderContext.BookId}");
+            if (!string.IsNullOrWhiteSpace(input.ReaderContext.Title))
+            {
+                sb.AppendLine($"- 标题：{input.ReaderContext.Title.Trim()}");
+            }
+            if (!string.IsNullOrWhiteSpace(input.ReaderContext.Format))
+            {
+                sb.AppendLine($"- 格式：{input.ReaderContext.Format.Trim().ToUpperInvariant()}");
+            }
+            if (!string.IsNullOrWhiteSpace(input.ReaderContext.Locator))
+            {
+                sb.AppendLine($"- 定位：{TrimContext(input.ReaderContext.Locator, 500)}");
+            }
+            if (!string.IsNullOrWhiteSpace(input.ReaderContext.SelectedText))
+            {
+                sb.AppendLine("- 当前选中文本：");
+                sb.AppendLine(TrimContext(input.ReaderContext.SelectedText, 1800));
+            }
+            sb.AppendLine();
+            sb.AppendLine("要求：优先结合上述选中文本与定位回答问题。");
             sb.AppendLine();
         }
 
@@ -1365,6 +1437,12 @@ public sealed class OpenAiAnalysisService : IAiAnalysisService
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static string TrimContext(string value, int length)
+    {
+        var clean = (value ?? string.Empty).Trim();
+        return clean.Length <= length ? clean : $"{clean[..length]}...";
     }
 
     private static string GetValue(

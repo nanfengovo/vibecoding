@@ -81,10 +81,28 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '信息采集', icon: 'Connection' }
       },
       {
+        path: 'reader',
+        name: 'ReaderShelf',
+        component: () => import('@/views/ReaderShelf.vue'),
+        meta: { title: '图书阅读', icon: 'Reading' }
+      },
+      {
+        path: 'reader/:bookId',
+        name: 'ReaderViewer',
+        component: () => import('@/views/ReaderViewer.vue'),
+        meta: { title: '阅读器', hidden: true }
+      },
+      {
         path: 'knowledge',
         name: 'KnowledgeBase',
         component: () => import('@/views/KnowledgeBase.vue'),
         meta: { title: '知识库', icon: 'Collection' }
+      },
+      {
+        path: 'memories',
+        name: 'MemoryCenter',
+        component: () => import('@/views/MemoryCenter.vue'),
+        meta: { title: '记忆中心', icon: 'Collection' }
       },
       {
         path: 'lowcode',
@@ -111,6 +129,30 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.onError((error, to) => {
+  const message = String(error?.message || '')
+  const isChunkLoadError =
+    /failed to fetch dynamically imported module/i.test(message) ||
+    /importing a module script failed/i.test(message) ||
+    /loading chunk [\\d]+ failed/i.test(message) ||
+    /chunk load error/i.test(message)
+
+  if (!isChunkLoadError || typeof window === 'undefined') {
+    return
+  }
+
+  const flagKey = 'qt-router-reload-once'
+  const hasRetried = window.sessionStorage.getItem(flagKey) === '1'
+  if (hasRetried) {
+    window.sessionStorage.removeItem(flagKey)
+    return
+  }
+
+  window.sessionStorage.setItem(flagKey, '1')
+  const fallbackPath = to?.fullPath || window.location.pathname + window.location.search + window.location.hash
+  window.location.assign(fallbackPath)
 })
 
 router.beforeEach(async (to) => {

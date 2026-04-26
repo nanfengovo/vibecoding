@@ -21,12 +21,16 @@ import type {
   AuthUser,
   AiChatSessionSummary,
   AiChatSessionDetail,
+  AiMemoryListResult,
   AiMemoryRecord,
   CrawlerSource,
   CrawlerJobRecord,
   CrawlerDocument,
   KnowledgeBase,
-  KnowledgeDocument
+  KnowledgeDocument,
+  ReaderBook,
+  ReaderHighlight,
+  ReaderProgress
 } from '@/types'
 import { announceDemoMode, demoApi, shouldUseDemoApi } from '@/api/demo'
 
@@ -48,16 +52,26 @@ function resolveApiBaseUrl(): string {
 
 const api: AxiosInstance = axios.create({
   baseURL: resolveApiBaseUrl(),
-  timeout: 90000,
-  headers: {
-    'Content-Type': 'application/json'
-  }
+  timeout: 90000
 })
 
 export const AUTH_TOKEN_KEY = 'qt-auth-token'
 export const AUTH_USER_KEY = 'qt-auth-user'
 
 api.interceptors.request.use((config) => {
+  // Important: when sending FormData, JSON content-type forces Axios to serialize
+  // the payload to `{}`. Remove it so browser can set multipart boundary.
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    const headers = config.headers as any
+    if (headers) {
+      if (typeof headers.delete === 'function') {
+        headers.delete('Content-Type')
+      } else {
+        delete headers['Content-Type']
+      }
+    }
+  }
+
   if (typeof localStorage !== 'undefined') {
     const token = localStorage.getItem(AUTH_TOKEN_KEY)
     if (token) {
@@ -595,6 +609,13 @@ export const aiApi = {
       sessionId?: number
       knowledgeBaseId?: number
       useMemory?: boolean
+      readerContext?: {
+        bookId: number
+        title: string
+        format: string
+        locator: string
+        selectedText: string
+      }
     }
   ) =>
     DEMO_MODE
@@ -613,11 +634,55 @@ export const aiApi = {
   deleteSession: (id: number) =>
     api.delete(`/ai/sessions/${id}`),
 
-  listMemories: () =>
-    api.get<any, AiMemoryRecord[]>('/ai/memories'),
+  listMemories: (
+    params?: {
+      type?: string
+      sourceType?: string
+      knowledgeBaseId?: number
+      query?: string
+      page?: number
+      pageSize?: number
+    }
+  ) =>
+    api.get<any, AiMemoryListResult>('/ai/memories', { params }),
 
-  createMemory: (payload: Partial<AiMemoryRecord>) =>
+  createMemory: (payload: {
+    type?: string
+    title?: string
+    content: string
+    symbol?: string
+    tags?: string
+    priority?: number
+    sourceType?: string
+    sourceUrl?: string
+    sourceRef?: string
+    knowledgeBaseId?: number
+    providerId?: string
+    model?: string
+  }) =>
     api.post<any, AiMemoryRecord>('/ai/memories', payload),
+
+  updateMemory: (
+    id: number,
+    payload: {
+      type?: string
+      title?: string
+      content?: string
+      symbol?: string
+      tags?: string
+      priority?: number
+      sourceType?: string
+      sourceUrl?: string
+      sourceRef?: string
+      knowledgeBaseId?: number
+      providerId?: string
+      model?: string
+    }
+  ) =>
+    api.put<any, AiMemoryRecord>(`/ai/memories/${id}`, payload),
+
+  syncMemory: (id: number) =>
+    api.post<any, AiMemoryRecord>(`/ai/memories/${id}/sync`, {}),
 
   deleteMemory: (id: number) =>
     api.delete(`/ai/memories/${id}`),
@@ -628,6 +693,16 @@ export const aiApi = {
       symbol?: string
       providerId?: string
       model?: string
+      scene?: string
+      contextText?: string
+      knowledgeBaseId?: number
+      readerContext?: {
+        bookId: number
+        title: string
+        format: string
+        locator: string
+        selectedText: string
+      }
     }
   ) =>
     DEMO_MODE
@@ -679,6 +754,61 @@ export const knowledgeApi = {
     api.get<any, Blob>(`/knowledge-bases/${id}/documents/${documentId}/export`, { responseType: 'blob' }),
   chat: (id: number, payload: { question: string; providerId?: string; model?: string }) =>
     api.post<any, AiChatResult>(`/knowledge-bases/${id}/chat`, payload)
+}
+
+export const readerApi = {
+  listBooks: () => api.get<any, ReaderBook[]>('/reader/books'),
+  getBook: (id: number) => api.get<any, ReaderBook>(`/reader/books/${id}`),
+  deleteBook: (id: number) => api.delete(`/reader/books/${id}`),
+  uploadBook: (
+    file: File,
+    options?: {
+      timeoutMs?: number
+      onProgress?: (percent: number) => void
+    }
+  ) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post<any, ReaderBook>('/reader/books/upload', form, {
+      timeout: options?.timeoutMs ?? 10 * 60 * 1000,
+      onUploadProgress: (event) => {
+        const total = Number(event.total || 0)
+        const loaded = Number(event.loaded || 0)
+        if (!options?.onProgress || total <= 0) {
+          return
+        }
+
+        const percent = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)))
+        options.onProgress(percent)
+      }
+    })
+  },
+  importCrawlerDocument: (crawlerDocumentId: number) =>
+    api.post<any, ReaderBook>(`/reader/books/import-crawler/${crawlerDocumentId}`),
+  getBookContent: (id: number) =>
+    api.get<any, Blob>(`/reader/books/${id}/content`, { responseType: 'blob' }),
+  getProgress: (id: number) =>
+    api.get<any, ReaderProgress | null>(`/reader/books/${id}/progress`),
+  saveProgress: (
+    id: number,
+    payload: { locator?: string; chapterTitle?: string; pageNumber?: number | null; percentage?: number | null }
+  ) =>
+    api.put<any, ReaderProgress>(`/reader/books/${id}/progress`, payload),
+  listHighlights: (id: number) =>
+    api.get<any, ReaderHighlight[]>(`/reader/books/${id}/highlights`),
+  createHighlight: (
+    id: number,
+    payload: { locator?: string; chapterTitle?: string; selectedText: string; note?: string; color?: string }
+  ) =>
+    api.post<any, ReaderHighlight>(`/reader/books/${id}/highlights`, payload),
+  updateHighlight: (
+    id: number,
+    highlightId: number,
+    payload: { locator?: string; chapterTitle?: string; selectedText?: string; note?: string; color?: string }
+  ) =>
+    api.put<any, ReaderHighlight>(`/reader/books/${id}/highlights/${highlightId}`, payload),
+  deleteHighlight: (id: number, highlightId: number) =>
+    api.delete(`/reader/books/${id}/highlights/${highlightId}`)
 }
 
 // 配置API

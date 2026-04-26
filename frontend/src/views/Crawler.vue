@@ -50,6 +50,11 @@
           <el-table-column prop="createdAt" label="入库时间" width="170">
             <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
           </el-table-column>
+          <el-table-column label="操作" width="140" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click.stop="importAsReader(row.id)">转为阅读材料</el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </section>
     </div>
@@ -102,11 +107,13 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
-import { crawlerApi } from '@/api'
+import { crawlerApi, readerApi } from '@/api'
 import type { CrawlerDocument, CrawlerSource } from '@/types'
 
+const router = useRouter()
 const sources = ref<CrawlerSource[]>([])
 const documents = ref<CrawlerDocument[]>([])
 const selectedDoc = ref<CrawlerDocument | null>(null)
@@ -187,6 +194,12 @@ async function remove(id: number) {
   await crawlerApi.deleteSource(id)
   ElMessage.success('来源已删除')
   await loadSources()
+}
+
+async function importAsReader(crawlerDocumentId: number) {
+  const book = await readerApi.importCrawlerDocument(crawlerDocumentId)
+  ElMessage.success('已转为阅读材料')
+  router.push(`/reader/${book.id}`)
 }
 
 function selectDoc(row: CrawlerDocument) {
