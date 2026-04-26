@@ -85,62 +85,51 @@
         </div>
       </div>
 
-      <el-table 
-        :data="trades" 
-        style="width: 100%"
-        v-loading="loading"
-        table-layout="fixed"
-        @sort-change="handleSortChange"
-      >
-        <el-table-column prop="executedAt" label="时间" width="160" sortable="custom">
-          <template #default="{ row }">
-            {{ formatDateTime(row.executedAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="symbol" label="股票" width="100">
-          <template #default="{ row }">
-            <el-link type="primary" @click="$router.push(`/stock/${row.symbol}`)">
-              {{ row.symbol }}
-            </el-link>
-          </template>
-        </el-table-column>
-        <el-table-column prop="stockName" label="名称" width="120" />
-        <el-table-column prop="side" label="方向" width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.side === 'buy' ? 'success' : 'danger'" size="small">
-              {{ row.side === 'buy' ? '买入' : '卖出' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="quantity" label="数量" width="80" align="right" />
-        <el-table-column prop="price" label="价格" width="100" align="right">
-          <template #default="{ row }">
-            {{ formatCurrency(row.price) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="amount" label="金额" width="120" align="right" sortable="custom">
-          <template #default="{ row }">
-            {{ formatCurrency(row.amount) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="commission" label="佣金" width="80" align="right">
-          <template #default="{ row }">
-            {{ formatCurrency(row.commission) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ getStatusLabel(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="strategyName" label="策略" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.strategyName || '手动交易' }}
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="glass-list-view" v-loading="loading">
+        <div class="list-header">
+          <div class="col-time" style="width: 160px">时间</div>
+          <div class="col-symbol" style="width: 100px">股票</div>
+          <div class="col-name hide-mobile" style="width: 120px">名称</div>
+          <div class="col-side" style="width: 60px; text-align: center">方向</div>
+          <div class="col-quantity" style="width: 80px; text-align: right">数量</div>
+          <div class="col-price" style="width: 100px; text-align: right">价格</div>
+          <div class="col-amount hide-mobile" style="width: 120px; text-align: right">金额</div>
+          <div class="col-comm hide-mobile" style="width: 80px; text-align: right">佣金</div>
+          <div class="col-status" style="width: 100px; justify-content: center; display: flex">状态</div>
+          <div class="col-strategy hide-mobile" style="flex: 1; padding-left: 16px">策略</div>
+        </div>
+        <div class="list-body" v-if="trades.length > 0">
+          <div v-for="row in trades" :key="row.id" class="list-row">
+            <div class="col-time number-font text-muted" style="width: 160px">
+              {{ formatDateTime(row.executedAt) }}
+            </div>
+            <div class="col-symbol" style="width: 100px">
+              <el-link type="primary" @click="$router.push(`/stock/${row.symbol}`)">
+                {{ row.symbol }}
+              </el-link>
+            </div>
+            <div class="col-name hide-mobile" style="width: 120px">{{ row.stockName }}</div>
+            <div class="col-side" style="width: 60px; text-align: center">
+              <span :class="row.side === 'buy' ? 'price-up' : 'price-down'">
+                {{ row.side === 'buy' ? '买入' : '卖出' }}
+              </span>
+            </div>
+            <div class="col-quantity number-font" style="width: 80px; text-align: right">{{ row.quantity }}</div>
+            <div class="col-price number-font" style="width: 100px; text-align: right">{{ formatCurrency(row.price) }}</div>
+            <div class="col-amount hide-mobile number-font" style="width: 120px; text-align: right">{{ formatCurrency(row.amount) }}</div>
+            <div class="col-comm hide-mobile number-font text-muted" style="width: 80px; text-align: right">{{ formatCurrency(row.commission) }}</div>
+            <div class="col-status" style="width: 100px; justify-content: center; display: flex">
+              <el-tag :type="getStatusType(row.status)" size="small" class="glass-tag">
+                {{ getStatusLabel(row.status) }}
+              </el-tag>
+            </div>
+            <div class="col-strategy hide-mobile text-muted" style="flex: 1; padding-left: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+              {{ row.strategyName || '手动交易' }}
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-state">暂无交易记录</div>
+      </div>
 
       <div class="pagination">
         <el-pagination
@@ -270,10 +259,6 @@ async function applyFilters() {
   await loadStats()
 }
 
-function handleSortChange(_: unknown) {
-  // 实现排序逻辑
-  loadTrades()
-}
 
 function exportTrades() {
   ElMessage.info('导出功能开发中...')
@@ -320,9 +305,58 @@ onMounted(() => {
     justify-content: flex-end;
   }
 
-  :deep(.el-table td.el-table__cell),
-  :deep(.el-table th.el-table__cell) {
-    white-space: nowrap;
+  /* Glass List View for Trades */
+  .glass-list-view {
+    background: transparent;
+    border: 1px solid var(--qt-border);
+    border-radius: 8px;
+    overflow: hidden;
+
+    .list-header {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--qt-border);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--qt-text-secondary);
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .list-row {
+      display: flex;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--qt-border);
+      font-size: 14px;
+      color: var(--qt-text);
+      transition: all 0.2s ease;
+
+      &:last-child {
+        border-bottom: none;
+      }
+
+      &:hover {
+        background: color-mix(in srgb, #3b82f6 10%, transparent 90%);
+      }
+    }
+
+    .text-muted { color: var(--qt-text-muted); }
+    .number-font { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+    .price-up { color: #f6465d; font-weight: 600; }
+    .price-down { color: #0ecb81; font-weight: 600; }
+
+    .glass-tag {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--qt-border);
+    }
+
+    .empty-state {
+      padding: 40px;
+      text-align: center;
+      color: var(--qt-text-muted);
+    }
   }
 }
 
@@ -342,6 +376,12 @@ onMounted(() => {
     .pagination {
       justify-content: flex-start;
       overflow-x: auto;
+    }
+
+    .glass-list-view {
+      .hide-mobile {
+        display: none !important;
+      }
     }
   }
 }

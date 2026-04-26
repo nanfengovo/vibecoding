@@ -1,0 +1,54 @@
+// 毛玻璃效果与轻 3D UI 工具类库
+@use './variables.scss' as *;
+
+.glass-panel {
+  background: var(--qt-surface-glass);
+  backdrop-filter: blur(var(--qt-blur));
+  -webkit-backdrop-filter: blur(var(--qt-blur));
+  border: 1px solid var(--qt-border-glow);
+  border-radius: var(--qt-radius-lg);
+  box-shadow: var(--qt-shadow-card);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-panel:hover {
+  box-shadow: var(--qt-shadow-float);
+  border-color: color-mix(in srgb, var(--qt-border-glow) 60%, var(--qt-primary) 40%);
+}
+
+// 强调发光效果的按钮或边框
+.glow-border {
+  position: relative;
+}
+
+.glow-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(to bottom right, var(--qt-primary), transparent, var(--qt-success));
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.glow-border:hover::before {
+  opacity: 0.3;
+}
+
+// 现代金融终端面板
+.fin-terminal-card {
+  @extend .glass-panel;
+  background: var(--qt-surface);
+  
+  // 覆盖 element plus 卡片内部边距使其更紧凑
+  .el-card__header {
+    border-bottom-color: var(--qt-border);
+    padding: 12px 16px;
+    font-weight: 600;
+  }
+  
+  .el-card__body {
+    padding: 16px;
+  }
+}

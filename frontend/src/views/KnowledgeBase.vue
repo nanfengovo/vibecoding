@@ -34,28 +34,44 @@
 
         <section class="card">
           <div class="section-title">文档</div>
-          <el-table :data="documents" height="260" @row-click="selectDoc">
-            <el-table-column prop="title" label="标题" min-width="220" />
-            <el-table-column prop="sourceType" label="来源" width="130" />
-            <el-table-column label="操作" width="140">
-              <template #default="{ row }">
-                <el-button link type="primary" @click.stop="exportDoc(row)">导出</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
+          <div class="glass-list-view" style="height: 260px; display: flex; flex-direction: column">
+            <div class="list-header" style="flex: 0 0 auto">
+              <div class="col-title" style="flex: 1">标题</div>
+              <div class="col-source hide-mobile" style="width: 130px">来源</div>
+              <div class="col-actions" style="width: 80px; justify-content: flex-end; display: flex">操作</div>
+            </div>
+            <div class="list-body" style="flex: 1 1 auto; overflow-y: auto" v-if="documents.length > 0">
+              <div v-for="row in documents" :key="row.id" class="list-row clickable" :class="{ 'active': selectedDoc?.id === row.id }" @click="selectDoc(row)">
+                <div class="col-title" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ row.title }}</div>
+                <div class="col-source hide-mobile text-muted" style="width: 130px">{{ row.sourceType }}</div>
+                <div class="col-actions" style="width: 80px; justify-content: flex-end; display: flex">
+                  <el-button link type="primary" size="small" @click.stop="exportDoc(row)">导出</el-button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty-state">暂无文档</div>
+          </div>
         </section>
 
         <section class="card">
           <div class="section-title">从采集文档入库</div>
-          <el-table :data="crawlerDocs" height="220">
-            <el-table-column prop="title" label="标题" min-width="220" />
-            <el-table-column prop="symbol" label="标的" width="110" />
-            <el-table-column label="操作" width="120">
-              <template #default="{ row }">
-                <el-button link type="primary" :disabled="!activeKbId" @click="importCrawler(row.id)">入库</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
+          <div class="glass-list-view" style="height: 220px; display: flex; flex-direction: column">
+            <div class="list-header" style="flex: 0 0 auto">
+              <div class="col-title" style="flex: 1">标题</div>
+              <div class="col-symbol hide-mobile" style="width: 110px">标的</div>
+              <div class="col-actions" style="width: 80px; justify-content: flex-end; display: flex">操作</div>
+            </div>
+            <div class="list-body" style="flex: 1 1 auto; overflow-y: auto" v-if="crawlerDocs.length > 0">
+              <div v-for="row in crawlerDocs" :key="row.id" class="list-row">
+                <div class="col-title" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ row.title }}</div>
+                <div class="col-symbol hide-mobile text-muted" style="width: 110px">{{ row.symbol }}</div>
+                <div class="col-actions" style="width: 80px; justify-content: flex-end; display: flex">
+                  <el-button link type="primary" size="small" :disabled="!activeKbId" @click="importCrawler(row.id)">入库</el-button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty-state">暂无采集文档</div>
+          </div>
         </section>
 
         <section class="card chat-card">
@@ -437,6 +453,64 @@ onMounted(async () => {
   }
 }
 
+/* Glass List View */
+.glass-list-view {
+  background: transparent;
+  border: 1px solid var(--qt-border);
+  border-radius: 8px;
+  overflow: hidden;
+
+  .list-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--qt-text-secondary);
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  .list-row {
+    display: flex;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 14px;
+    color: var(--qt-text);
+    transition: all 0.2s ease;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:hover {
+      background: color-mix(in srgb, #3b82f6 10%, transparent 90%);
+    }
+
+    &.clickable {
+      cursor: pointer;
+    }
+
+    &.active {
+      background: rgba(59, 130, 246, 0.2);
+    }
+  }
+
+  .text-muted { color: var(--qt-text-muted); }
+  .number-font { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+  .empty-state {
+    padding: 40px;
+    text-align: center;
+    color: var(--qt-text-muted);
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
 @media (max-width: 960px) {
   .knowledge-layout {
     grid-template-columns: 1fr;
@@ -444,6 +518,12 @@ onMounted(async () => {
 
   .chat-row {
     grid-template-columns: 1fr;
+  }
+
+  .glass-list-view {
+    .hide-mobile {
+      display: none !important;
+    }
   }
 }
 </style>

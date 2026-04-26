@@ -36,72 +36,53 @@
     </section>
 
     <section class="card table-card" v-loading="loading">
-      <el-table :data="rows" height="560">
-        <el-table-column label="标题" min-width="220">
-          <template #default="{ row }">
-            <div class="title-cell">{{ row.title || '未命名记忆' }}</div>
-            <div class="sub-meta">
-              类型：{{ row.type || '-' }} · 来源：{{ row.sourceType || '-' }}
+      <div class="glass-list-view" style="height: 560px; display: flex; flex-direction: column">
+        <div class="list-header" style="flex: 0 0 auto">
+          <div class="col-title" style="flex: 1.5">标题与内容</div>
+          <div class="col-assoc hide-mobile" style="width: 180px">关联</div>
+          <div class="col-source hide-mobile" style="width: 180px">来源</div>
+          <div class="col-tags hide-mobile" style="width: 160px">标签</div>
+          <div class="col-time hide-mobile" style="width: 150px">更新时间</div>
+          <div class="col-actions" style="width: 140px; justify-content: flex-end; display: flex">操作</div>
+        </div>
+        <div class="list-body" style="flex: 1 1 auto; overflow-y: auto" v-if="rows.length > 0">
+          <div v-for="row in rows" :key="row.id" class="list-row align-top">
+            <div class="col-title" style="flex: 1.5; min-width: 0; padding-right: 16px">
+              <div class="title-cell">{{ row.title || '未命名记忆' }}</div>
+              <div class="sub-meta">类型：{{ row.type || '-' }}</div>
+              <div class="content-cell text-muted">{{ row.content }}</div>
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="内容" min-width="320">
-          <template #default="{ row }">
-            <div class="content-cell">{{ row.content }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="关联" width="180">
-          <template #default="{ row }">
-            <div class="assoc-cell">
-              <div>KB：{{ resolveKnowledgeBaseName(row.knowledgeBaseId) }}</div>
-              <div>Doc：{{ row.knowledgeDocumentId || '-' }}</div>
-              <div>状态：{{ row.syncStatus || '-' }}</div>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="来源" width="180">
-          <template #default="{ row }">
-            <div class="source-cell">
-              <div class="source-type">{{ row.sourceType || '-' }}</div>
-              <div class="source-actions">
-                <el-button
-                  v-if="isLinkableSource(row.sourceUrl)"
-                  link
-                  type="primary"
-                  @click="openSource(row.sourceUrl)"
-                >
-                  查看来源
-                </el-button>
-                <el-button
-                  v-if="row.knowledgeBaseId"
-                  link
-                  type="primary"
-                  @click="goKnowledge(row.knowledgeBaseId)"
-                >
-                  查看知识库
-                </el-button>
+            <div class="col-assoc hide-mobile" style="width: 180px">
+              <div class="assoc-cell">
+                <div>KB：{{ resolveKnowledgeBaseName(row.knowledgeBaseId) }}</div>
+                <div>Doc：{{ row.knowledgeDocumentId || '-' }}</div>
+                <div :class="{'text-success': row.syncStatus === 'synced'}">状态：{{ row.syncStatus || '-' }}</div>
               </div>
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="标签" width="160">
-          <template #default="{ row }">
-            <span class="tags-text">{{ row.tags || '-' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="更新时间" width="170">
-          <template #default="{ row }">
-            {{ formatTime(row.updatedAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="primary" @click="syncRow(row.id)">同步</el-button>
-            <el-button link type="danger" @click="archiveRow(row.id)">归档</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+            <div class="col-source hide-mobile" style="width: 180px">
+              <div class="source-cell">
+                <div class="source-type">{{ row.sourceType || '-' }}</div>
+                <div class="source-actions">
+                  <el-button v-if="isLinkableSource(row.sourceUrl)" link type="primary" size="small" @click="openSource(row.sourceUrl)">来源</el-button>
+                  <el-button v-if="row.knowledgeBaseId" link type="primary" size="small" @click="goKnowledge(row.knowledgeBaseId)">知识库</el-button>
+                </div>
+              </div>
+            </div>
+            <div class="col-tags hide-mobile" style="width: 160px">
+              <span class="tags-text">{{ row.tags || '-' }}</span>
+            </div>
+            <div class="col-time hide-mobile number-font text-muted" style="width: 150px">
+              {{ formatTime(row.updatedAt) }}
+            </div>
+            <div class="col-actions" style="width: 140px; justify-content: flex-end; display: flex; gap: 4px; align-items: flex-start">
+              <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+              <el-button link type="primary" size="small" @click="syncRow(row.id)">同步</el-button>
+              <el-button link type="danger" size="small" @click="archiveRow(row.id)">归档</el-button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-state">暂无记忆记录</div>
+      </div>
 
       <div class="pager-row">
         <el-pagination
@@ -383,14 +364,75 @@ onMounted(async () => {
 }
 
 .pager-row {
-  margin-top: 12px;
+  margin-top: 16px;
   display: flex;
   justify-content: flex-end;
+}
+
+/* Glass List View */
+.glass-list-view {
+  background: transparent;
+  border: 1px solid var(--qt-border);
+  border-radius: 8px;
+  overflow: hidden;
+
+  .list-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--qt-text-secondary);
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  .list-row {
+    display: flex;
+    align-items: center;
+    padding: 16px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 14px;
+    color: var(--qt-text);
+    transition: all 0.2s ease;
+
+    &.align-top {
+      align-items: flex-start;
+    }
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:hover {
+      background: color-mix(in srgb, #3b82f6 10%, transparent 90%);
+    }
+  }
+
+  .text-muted { color: var(--qt-text-muted); }
+  .text-success { color: #10b981; }
+  .number-font { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+  .empty-state {
+    padding: 40px;
+    text-align: center;
+    color: var(--qt-text-muted);
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 }
 
 @media (max-width: 1200px) {
   .filter-row {
     align-items: stretch;
+  }
+  
+  .glass-list-view {
+    .hide-mobile {
+      display: none !important;
+    }
   }
 }
 </style>

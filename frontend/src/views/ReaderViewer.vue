@@ -1,10 +1,13 @@
 <template>
   <div class="reader-viewer-page">
-    <div class="page-header">
+    <div class="reader-toolbar glass-panel">
       <div class="header-left">
-        <el-button text @click="goBack">返回书架</el-button>
+        <el-button text @click="goBack" class="back-btn">
+          <el-icon><Back /></el-icon>
+          返回书架
+        </el-button>
         <h1>{{ book?.title || '阅读器' }}</h1>
-        <el-tag v-if="book" size="small">{{ book.format }}</el-tag>
+        <el-tag v-if="book" size="small" effect="dark" class="format-tag">{{ book.format }}</el-tag>
       </div>
       <div class="header-actions">
         <el-select
@@ -13,7 +16,7 @@
           placeholder="目录跳转"
           filterable
           clearable
-          style="width: 280px"
+          class="toc-select"
           @change="goToToc"
         >
           <el-option
@@ -23,121 +26,124 @@
             :value="item.href"
           />
         </el-select>
-        <el-button @click="prevPage">上一页</el-button>
-        <el-button @click="nextPage">下一页</el-button>
-        <el-button link type="primary" @click="showNotices = true">Open Source Notices</el-button>
+        <el-button @click="prevPage" circle><el-icon><ArrowLeft /></el-icon></el-button>
+        <el-button @click="nextPage" circle><el-icon><ArrowRight /></el-icon></el-button>
+        <el-button v-if="isMobile" type="primary" circle class="mobile-ai-btn" @click="showMobilePanel = true">
+          <el-icon><ChatDotRound /></el-icon>
+        </el-button>
+        <el-button v-else link type="primary" @click="showNotices = true">Notices</el-button>
       </div>
     </div>
 
     <div class="reader-layout">
-      <section class="viewer card" v-loading="loading">
-        <div class="viewer-meta">
-          <span>定位：{{ location.locator || '未定位' }}</span>
-          <span v-if="location.chapterTitle">章节：{{ location.chapterTitle }}</span>
-          <span v-if="location.pageNumber">页码：{{ location.pageNumber }}</span>
-          <span v-if="location.percentage !== null && location.percentage !== undefined">
-            进度：{{ Number(location.percentage).toFixed(2) }}%
-          </span>
+      <section class="viewer fin-terminal-card" v-loading="loading">
+        <div class="viewer-meta glass-panel">
+          <div class="meta-item"><span>定位</span> {{ location.locator || '未定位' }}</div>
+          <div class="meta-item" v-if="location.chapterTitle"><span>章节</span> {{ location.chapterTitle }}</div>
+          <div class="meta-item" v-if="location.pageNumber"><span>页码</span> {{ location.pageNumber }}</div>
+          <div class="meta-item" v-if="location.percentage !== null && location.percentage !== undefined">
+            <span>进度</span> {{ Number(location.percentage).toFixed(2) }}%
+          </div>
         </div>
-        <div ref="viewerHostRef" class="viewer-host" />
+        <div class="pdf-container-glass">
+          <div ref="viewerHostRef" class="viewer-host" />
+        </div>
       </section>
 
-      <aside class="side-panel">
-        <section class="card">
-          <div class="section-title">选中文本联动</div>
-          <el-input
-            v-model="selectedText"
-            type="textarea"
-            :rows="6"
-            placeholder="在阅读区域选中内容后会自动填充"
-          />
-          <el-input
-            v-model="highlightNote"
-            class="top-gap"
-            placeholder="可选：这段的理解/备注"
-          />
-          <div class="inline-actions top-gap">
-            <el-select v-model="highlightColor" style="width: 120px">
-              <el-option label="黄色" value="yellow" />
-              <el-option label="绿色" value="green" />
-              <el-option label="蓝色" value="blue" />
-              <el-option label="粉色" value="pink" />
-              <el-option label="橙色" value="orange" />
-              <el-option label="紫色" value="purple" />
-            </el-select>
-            <el-button type="primary" :disabled="!selectedText.trim()" @click="saveHighlight">保存划线</el-button>
+      <div v-if="isMobile && showMobilePanel" class="mobile-panel-mask" @click="showMobilePanel = false"></div>
+      <aside class="side-panel fin-terminal-card" :class="{ 'is-mobile-open': showMobilePanel }">
+        <div v-if="isMobile" class="mobile-panel-header">
+          <h3>AI Copilot</h3>
+          <el-button text circle @click="showMobilePanel = false"><el-icon><Close /></el-icon></el-button>
+        </div>
+        <div class="panel-scroll-area">
+          <div class="copilot-section">
+            <div class="section-title">选中文本</div>
+            <el-input
+              v-model="selectedText"
+              type="textarea"
+              :rows="4"
+              class="copilot-input"
+              placeholder="在左侧阅读区域选中文本将自动填充"
+            />
+            <el-input
+              v-model="highlightNote"
+              class="top-gap copilot-input"
+              placeholder="添加笔记 (可选)"
+            />
+            <div class="inline-actions top-gap">
+              <el-select v-model="highlightColor" style="width: 100px" size="small">
+                <el-option label="黄色" value="yellow" />
+                <el-option label="绿色" value="green" />
+                <el-option label="蓝色" value="blue" />
+                <el-option label="粉色" value="pink" />
+              </el-select>
+              <el-button type="primary" size="small" :disabled="!selectedText.trim()" @click="saveHighlight" plain>
+                保存划线
+              </el-button>
+            </div>
           </div>
 
-          <el-divider />
+          <el-divider class="glass-divider" />
 
-          <el-input
-            v-model="question"
-            type="textarea"
-            :rows="3"
-            placeholder="围绕当前选中文本提问"
-          />
-          <div class="inline-actions top-gap">
-            <el-select v-model="selectedProviderId" placeholder="模型源" style="width: 160px">
-              <el-option
-                v-for="provider in aiProviders"
-                :key="provider.id"
-                :label="provider.name"
-                :value="provider.id"
-              />
-            </el-select>
-            <el-select v-model="selectedModel" placeholder="模型" style="width: 180px">
-              <el-option
-                v-for="model in modelOptions"
-                :key="model"
-                :label="model"
-                :value="model"
-              />
-            </el-select>
-            <el-button :loading="optimizingPrompt" :disabled="!question.trim()" @click="optimizeQuestion">
-              优化提示词
-            </el-button>
-          </div>
-          <div class="inline-actions top-gap">
-            <el-button type="primary" :loading="askingAi" :disabled="!selectedText.trim()" @click="askAi">
-              问 AI
-            </el-button>
-            <el-button :disabled="!selectedText.trim()" @click="saveMemory">保存为记忆</el-button>
-          </div>
-          <div class="inline-actions top-gap">
-            <el-select v-model="selectedKbId" placeholder="选择知识库" style="width: 180px">
-              <el-option
-                v-for="kb in knowledgeBases"
-                :key="kb.id"
-                :label="kb.name"
-                :value="kb.id"
-              />
-            </el-select>
-            <el-button :disabled="!selectedText.trim() || !selectedKbId" @click="importToKnowledge">
-              入知识库
-            </el-button>
-          </div>
-          <div v-if="aiAnswer" class="ai-answer top-gap">
-            <div class="label">AI 回复</div>
-            <div class="answer-content" v-html="aiAnswerHtml" />
-          </div>
-        </section>
+          <div class="copilot-section">
+            <div class="section-title">AI 对话</div>
+            <el-input
+              v-model="question"
+              type="textarea"
+              :rows="3"
+              class="copilot-input"
+              placeholder="围绕选中文本提问"
+            />
+            <div class="inline-actions top-gap action-row">
+              <el-select v-model="selectedProviderId" placeholder="模型源" size="small" style="width: 110px">
+                <el-option v-for="provider in aiProviders" :key="provider.id" :label="provider.name" :value="provider.id" />
+              </el-select>
+              <el-select v-model="selectedModel" placeholder="模型" size="small" style="flex: 1">
+                <el-option v-for="model in modelOptions" :key="model" :label="model" :value="model" />
+              </el-select>
+            </div>
+            <div class="inline-actions top-gap action-row">
+              <el-button class="main-ai-btn" type="primary" :loading="askingAi" :disabled="!selectedText.trim()" @click="askAi">
+                <el-icon><ChatLineRound /></el-icon> 问 AI
+              </el-button>
+              <el-button size="small" :loading="optimizingPrompt" :disabled="!question.trim()" @click="optimizeQuestion">
+                优化提示词
+              </el-button>
+            </div>
+            
+            <div v-if="aiAnswer" class="ai-answer top-gap glass-panel">
+              <div class="label">AI 回复</div>
+              <div class="answer-content" v-html="aiAnswerHtml" />
+            </div>
 
-        <section class="card">
-          <div class="section-title">本书划线</div>
-          <el-table :data="highlights" height="320">
-            <el-table-column label="内容" min-width="200">
-              <template #default="{ row }">
-                <div class="highlight-text">{{ row.selectedText }}</div>
-                <div class="highlight-note" v-if="row.note">{{ row.note }}</div>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="90">
-              <template #default="{ row }">
-                <el-button link type="danger" @click="removeHighlight(row.id)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </section>
+            <div class="inline-actions top-gap save-actions">
+              <el-button size="small" :disabled="!selectedText.trim()" @click="saveMemory">保存到记忆</el-button>
+              <el-select v-model="selectedKbId" placeholder="知识库" size="small" style="width: 120px">
+                <el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" />
+              </el-select>
+              <el-button size="small" :disabled="!selectedText.trim() || !selectedKbId" @click="importToKnowledge">
+                入库
+              </el-button>
+            </div>
+          </div>
+
+          <el-divider class="glass-divider" />
+
+          <div class="copilot-section">
+            <div class="section-title">本书划线笔记</div>
+            <div class="highlights-list" v-if="highlights.length > 0">
+              <div v-for="row in highlights" :key="row.id" class="highlight-row">
+                <div class="highlight-content">
+                  <div class="highlight-text">{{ row.selectedText }}</div>
+                  <div class="highlight-note" v-if="row.note">{{ row.note }}</div>
+                </div>
+                <el-button link type="danger" @click="removeHighlight(row.id)"><el-icon><Delete /></el-icon></el-button>
+              </div>
+            </div>
+            <div v-else class="empty-highlights">暂无划线</div>
+          </div>
+        </div>
       </aside>
     </div>
 
@@ -159,6 +165,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { ArrowLeft, ArrowRight, Back, ChatDotRound, ChatLineRound, Close, Delete } from '@element-plus/icons-vue'
 import { aiApi, configApi, knowledgeApi, readerApi } from '@/api'
 import { parseAiMarkdown } from '@/utils/aiMarkdown'
 import type { AiProviderConfig, KnowledgeBase, ReaderBook, ReaderHighlight } from '@/types'
@@ -200,8 +207,15 @@ const selectedProviderId = ref('')
 const selectedModel = ref('')
 const showNotices = ref(false)
 
+const isMobile = ref(false)
+const showMobilePanel = ref(false)
+
 let adapter: KoodoAdapter | null = null
 let progressTimer: ReturnType<typeof setTimeout> | null = null
+
+function checkViewport() {
+  isMobile.value = window.innerWidth <= 960
+}
 
 const bookId = computed(() => Number(route.params.bookId))
 const aiAnswerHtml = computed(() => parseAiMarkdown(aiAnswer.value || '', 'reader-ai-answer').html)
@@ -533,12 +547,15 @@ async function importToKnowledge() {
 }
 
 onMounted(async () => {
+  checkViewport()
+  window.addEventListener('resize', checkViewport)
   await nextTick()
   await loadAiProviders()
   await initViewer()
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', checkViewport)
   flushProgressSave()
   adapter?.destroy()
   adapter = null
@@ -546,52 +563,147 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
-.reader-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 420px;
-  gap: 16px;
+.reader-viewer-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
-.card {
-  padding: 16px;
+.reader-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px;
+  margin-bottom: 16px;
+  border-radius: var(--qt-radius-lg);
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 0;
+      color: var(--qt-text);
+    }
+    
+    .back-btn {
+      color: var(--qt-text-secondary);
+      &:hover { color: var(--qt-text); }
+    }
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    
+    .toc-select {
+      width: 220px;
+    }
+  }
+}
+
+.reader-layout {
+  display: flex;
+  flex: 1;
+  gap: 16px;
+  min-height: 0;
 }
 
 .viewer {
-  min-height: calc(100vh - 180px);
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--qt-border);
 }
 
 .viewer-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  color: var(--qt-text-secondary);
-  font-size: 13px;
+  gap: 16px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  border-radius: var(--qt-radius-md);
+  
+  .meta-item {
+    font-size: 13px;
+    color: var(--qt-text);
+    
+    span {
+      color: var(--qt-text-muted);
+      margin-right: 4px;
+    }
+  }
+}
+
+.pdf-container-glass {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--qt-radius-md);
+  padding: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .viewer-host {
-  min-height: 420px;
-  border: 1px solid var(--qt-border);
-  border-radius: 8px;
-  padding: 10px;
-  background: color-mix(in srgb, var(--qt-card-bg) 86%, #fff 14%);
+  flex: 1;
+  background: #ffffff; /* 保持 PDF 区域白色 */
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   overflow: auto;
 }
 
+/* 右侧 AI 面板 */
 .side-panel {
-  display: grid;
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0; /* 让滚动区域充满 */
+}
+
+.panel-scroll-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
 }
 
+.copilot-section {
+  display: flex;
+  flex-direction: column;
+}
+
 .section-title {
-  font-weight: 700;
-  margin-bottom: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--qt-text);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.copilot-input {
+  :deep(.el-textarea__inner), :deep(.el-input__wrapper) {
+    background: var(--qt-bg-soft);
+    border-color: transparent;
+    &:focus {
+      background: var(--qt-surface);
+      border-color: var(--qt-primary);
+    }
+  }
 }
 
 .top-gap {
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
 .inline-actions {
@@ -601,40 +713,144 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 
-.ai-answer {
-  border: 1px solid var(--qt-border);
-  border-radius: 8px;
-  padding: 10px;
+.action-row {
+  display: flex;
+  width: 100%;
+}
 
+.main-ai-btn {
+  flex: 1;
+  font-weight: 600;
+}
+
+.save-actions {
+  justify-content: space-between;
+  border-top: 1px dashed var(--qt-border);
+  padding-top: 12px;
+}
+
+.ai-answer {
+  border: 1px solid var(--qt-border-glow);
+  padding: 12px;
+  
   .label {
-    font-weight: 700;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--qt-primary);
     margin-bottom: 8px;
   }
-
+  
   .answer-content {
-    line-height: 1.75;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--qt-text);
   }
 }
 
+.glass-divider {
+  border-color: var(--qt-border);
+  margin: 8px 0;
+}
+
+.highlights-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  .highlight-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--qt-border);
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    .highlight-content {
+      flex: 1;
+      min-width: 0;
+    }
+  }
+}
+
+.empty-highlights {
+  text-align: center;
+  color: var(--qt-text-muted);
+  padding: 24px 0;
+  font-size: 13px;
+}
+
 .highlight-text {
+  font-size: 13px;
+  color: var(--qt-text);
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.6;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 8px;
+  border-radius: 4px;
+  border-left: 3px solid var(--qt-primary);
 }
 
 .highlight-note {
   margin-top: 6px;
-  color: var(--qt-text-secondary);
   font-size: 12px;
+  color: var(--qt-text-secondary);
+  padding-left: 11px;
 }
 
-@media (max-width: 1200px) {
+.mobile-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--qt-border);
+  background: var(--qt-surface);
+  
+  h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+  }
+}
+
+.mobile-panel-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1999;
+}
+
+@media (max-width: 960px) {
   .reader-layout {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+  
+  .side-panel {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 80vh;
+    z-index: 2000;
+    border-radius: 20px 20px 0 0;
+    transform: translateY(100%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    
+    &.is-mobile-open {
+      transform: translateY(0);
+      box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.3);
+    }
   }
 
-  .viewer {
-    min-height: 520px;
+  .reader-toolbar {
+    padding: 8px 12px;
+    .toc-select {
+      width: 140px;
+    }
   }
 }
 </style>

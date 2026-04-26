@@ -53,74 +53,72 @@
         </el-radio-group>
       </div>
 
-      <el-table :data="filteredStrategies" style="width: 100%">
-        <el-table-column prop="name" label="策略名称" width="200">
-          <template #default="{ row }">
-            <div class="strategy-name">
-              <el-icon :class="['status-dot', row.isActive ? 'active' : 'paused']">
-                <component :is="row.isActive ? 'VideoPause' : 'VideoPlay'" />
-              </el-icon>
-              <span>{{ row.name }}</span>
+      <div class="glass-list-view">
+        <div class="list-header">
+          <div class="col-name" style="width: 200px">策略名称</div>
+          <div class="col-desc" style="flex: 1">描述</div>
+          <div class="col-symbols" style="width: 180px">目标股票</div>
+          <div class="col-cond hide-mobile" style="width: 80px; text-align: center">条件数</div>
+          <div class="col-time hide-mobile" style="width: 160px">最后执行</div>
+          <div class="col-status" style="width: 100px">状态</div>
+          <div class="col-actions" style="width: 180px; justify-content: flex-end">操作</div>
+        </div>
+        <div class="list-body" v-if="filteredStrategies.length > 0">
+          <div v-for="row in filteredStrategies" :key="row.id" class="list-row">
+            <div class="col-name" style="width: 200px">
+              <div class="strategy-name">
+                <el-icon :class="['status-dot', row.isActive ? 'active' : 'paused']">
+                  <component :is="row.isActive ? 'VideoPause' : 'VideoPlay'" />
+                </el-icon>
+                <span>{{ row.name }}</span>
+              </div>
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="description" label="描述" show-overflow-tooltip />
-        <el-table-column prop="targetSymbols" label="目标股票" width="180">
-          <template #default="{ row }">
-            <div class="symbol-tags">
-              <el-tag 
-                v-for="s in (row.config?.targetSymbols || []).slice(0, 3)" 
-                :key="s" 
-                size="small"
-              >
-                {{ s }}
-              </el-tag>
-              <el-tag 
-                v-if="(row.config?.targetSymbols || []).length > 3" 
-                size="small" 
-                type="info"
-              >
-                +{{ row.config.targetSymbols.length - 3 }}
-              </el-tag>
+            <div class="col-desc text-muted" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+              {{ row.description }}
             </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="conditions" label="条件数" width="80" align="center">
-          <template #default="{ row }">
-            {{ row.config?.conditions?.length || 0 }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="lastExecutedAt" label="最后执行" width="160">
-          <template #default="{ row }">
-            {{ row.lastExecutedAt ? formatDate(row.lastExecutedAt) : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="isActive" label="状态" width="100">
-          <template #default="{ row }">
-            <el-switch 
-              v-model="row.isActive" 
-              :loading="toggling === row.id"
-              @change="toggleStrategy(row)"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="executeStrategy(row.id)">
-              执行
-            </el-button>
-            <el-button link type="primary" size="small" @click="reloadStrategy(row.id)">
-              热重载
-            </el-button>
-            <el-button link type="primary" size="small" @click="editStrategy(row.id)">
-              编辑
-            </el-button>
-            <el-button link type="danger" size="small" @click="deleteStrategy(row.id)">
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+            <div class="col-symbols" style="width: 180px">
+              <div class="symbol-tags">
+                <el-tag 
+                  v-for="s in (row.config?.targetSymbols || []).slice(0, 3)" 
+                  :key="s" 
+                  size="small"
+                  class="glass-tag"
+                >
+                  {{ s }}
+                </el-tag>
+                <el-tag 
+                  v-if="(row.config?.targetSymbols || []).length > 3" 
+                  size="small" 
+                  type="info"
+                  class="glass-tag"
+                >
+                  +{{ row.config.targetSymbols.length - 3 }}
+                </el-tag>
+              </div>
+            </div>
+            <div class="col-cond hide-mobile" style="width: 80px; text-align: center">
+              {{ row.config?.conditions?.length || 0 }}
+            </div>
+            <div class="col-time hide-mobile number-font text-muted" style="width: 160px">
+              {{ row.lastExecutedAt ? formatDate(row.lastExecutedAt) : '-' }}
+            </div>
+            <div class="col-status" style="width: 100px">
+              <el-switch 
+                v-model="row.isActive" 
+                :loading="toggling === row.id"
+                @change="toggleStrategy(row)"
+              />
+            </div>
+            <div class="col-actions" style="width: 180px; justify-content: flex-end; display: flex; gap: 8px">
+              <el-button link type="primary" size="small" @click="executeStrategy(row.id)">执行</el-button>
+              <el-button link type="primary" size="small" @click="reloadStrategy(row.id)">重载</el-button>
+              <el-button link type="primary" size="small" @click="editStrategy(row.id)">编辑</el-button>
+              <el-button link type="danger" size="small" @click="deleteStrategy(row.id)">删除</el-button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-state">暂无策略数据</div>
+      </div>
     </div>
   </div>
 </template>
@@ -287,6 +285,58 @@ onMounted(() => {
   .paused-value {
     color: #f59e0b;
   }
+
+  /* Glass List View for Strategies */
+  .glass-list-view {
+    background: transparent;
+    border: 1px solid var(--qt-border);
+    border-radius: 8px;
+    overflow: hidden;
+
+    .list-header {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--qt-border);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--qt-text-secondary);
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .list-row {
+      display: flex;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--qt-border);
+      font-size: 14px;
+      color: var(--qt-text);
+      transition: all 0.2s ease;
+
+      &:last-child {
+        border-bottom: none;
+      }
+
+      &:hover {
+        background: color-mix(in srgb, #3b82f6 10%, transparent 90%);
+      }
+    }
+
+    .text-muted { color: var(--qt-text-muted); }
+    .number-font { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+    .glass-tag {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--qt-border);
+      color: var(--qt-text);
+    }
+
+    .empty-state {
+      padding: 40px;
+      text-align: center;
+      color: var(--qt-text-muted);
+    }
+  }
 }
 
 @media (max-width: 960px) {
@@ -299,6 +349,12 @@ onMounted(() => {
       :deep(.el-col) {
         max-width: 50%;
         flex: 0 0 50%;
+      }
+    }
+
+    .glass-list-view {
+      .hide-mobile {
+        display: none !important;
       }
     }
   }

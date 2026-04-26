@@ -1,56 +1,12 @@
 @use './variables.scss' as *;
-
-:root {
-  --qt-bg: #f3f4f6;
-  --qt-card-bg: #ffffff;
-  --qt-border: #e5e7eb;
-  --qt-text-primary: #111827;
-  --qt-text-secondary: #6b7280;
-  --qt-text-muted: #9ca3af;
-  --qt-header-bg: #ffffff;
-  --qt-sidebar-bg: #1f2937;
-  --qt-sidebar-border: #374151;
-  --qt-accent: #3b82f6;
-  --qt-accent-glow: rgba(59, 130, 246, 0.24);
-}
-
-html.dark {
-  color-scheme: dark;
-  --qt-bg: #0b1220;
-  --qt-card-bg: #111827;
-  --qt-border: #263041;
-  --qt-text-primary: #e5e7eb;
-  --qt-text-secondary: #9ca3af;
-  --qt-text-muted: #6b7280;
-  --qt-header-bg: #0f172a;
-  --qt-sidebar-bg: #0f172a;
-  --qt-sidebar-border: #1f2937;
-  --qt-accent: #60a5fa;
-  --qt-accent-glow: rgba(96, 165, 250, 0.22);
-
-  --el-bg-color: #111827;
-  --el-bg-color-overlay: #0f172a;
-  --el-text-color-primary: #e5e7eb;
-  --el-text-color-regular: #cbd5e1;
-  --el-border-color: #263041;
-  --el-fill-color-light: #111827;
-  --el-fill-color-lighter: #1f2937;
-  --el-mask-color: rgba(2, 6, 23, 0.6);
-}
+@use './tokens.scss';
+@use './theme.scss';
+@use './glass.scss';
 
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-}
-
-html,
-body {
-  height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    'Noto Sans', sans-serif;
-  background-color: var(--qt-bg);
-  color: var(--qt-text-primary);
 }
 
 #app {
@@ -215,21 +171,12 @@ html.dark {
     box-shadow: none;
   }
 
-  .el-card,
-  .el-table,
-  .el-dialog,
-  .el-drawer,
-  .el-popover {
-    background-color: var(--qt-card-bg) !important;
-    border-color: var(--qt-border) !important;
-    color: var(--qt-text-primary);
-  }
-
+  // 以下已经被 theme.scss 覆盖，这里暂时保留特殊 table 覆盖
   .el-table th.el-table__cell,
   .el-table tr,
   .el-table td.el-table__cell {
-    background-color: var(--qt-card-bg) !important;
-    color: var(--qt-text-primary) !important;
+    background-color: transparent !important;
+    color: var(--qt-text) !important;
     border-color: var(--qt-border) !important;
   }
 

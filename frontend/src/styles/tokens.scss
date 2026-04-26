@@ -1,0 +1,75 @@
+:root {
+  // Brand Colors
+  --qt-primary: #1a56db;
+  --qt-primary-glow: rgba(26, 86, 219, 0.24);
+  
+  // Semantic Colors
+  --qt-success: #10b981; // 涨
+  --qt-danger: #ef4444; // 跌
+  --qt-warning: #f59e0b;
+  --qt-info: #6b7280;
+
+  // Backgrounds
+  --qt-bg: #f3f4f6;
+  --qt-bg-soft: #e5e7eb;
+  --qt-surface: #ffffff;
+  --qt-surface-glass: rgba(255, 255, 255, 0.75);
+  
+  // Borders
+  --qt-border: #e5e7eb;
+  --qt-border-strong: #d1d5db;
+  --qt-border-glow: rgba(255, 255, 255, 0.5);
+
+  // Text
+  --qt-text: #111827;
+  --qt-text-secondary: #6b7280;
+  --qt-text-muted: #9ca3af;
+
+  // Radius
+  --qt-radius-sm: 6px;
+  --qt-radius-md: 8px;
+  --qt-radius-lg: 12px;
+  --qt-radius-xl: 16px;
+  --qt-radius-2xl: 24px;
+
+  // Shadows
+  --qt-shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --qt-shadow-float: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  --qt-shadow-glow: 0 0 15px var(--qt-primary-glow);
+
+  // Blur
+  --qt-blur: 12px;
+}
+
+html.dark {
+  // Brand Colors
+  --qt-primary: #60a5fa; // 稍亮一点的蓝色
+  --qt-primary-glow: rgba(96, 165, 250, 0.22);
+
+  // Semantic Colors (深色模式保持鲜明但克制)
+  --qt-success: #10b981; 
+  --qt-danger: #ef4444;
+  --qt-warning: #fbbf24;
+  --qt-info: #9ca3af;
+
+  // Backgrounds (深蓝黑渐变体系)
+  --qt-bg: #050a14; // 深蓝黑
+  --qt-bg-soft: #0b1220; // 稍亮
+  --qt-surface: #111827;
+  --qt-surface-glass: rgba(17, 24, 39, 0.65);
+  
+  // Borders
+  --qt-border: #1f2937;
+  --qt-border-strong: #374151;
+  --qt-border-glow: rgba(255, 255, 255, 0.08);
+
+  // Text
+  --qt-text: #f3f4f6;
+  --qt-text-secondary: #9ca3af;
+  --qt-text-muted: #6b7280;
+
+  // Shadows
+  --qt-shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -2px rgba(0, 0, 0, 0.2);
+  --qt-shadow-float: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+  --qt-shadow-glow: 0 0 15px var(--qt-primary-glow);
+}

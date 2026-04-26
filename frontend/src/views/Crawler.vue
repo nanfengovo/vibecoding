@@ -15,47 +15,63 @@
 
     <div class="content-grid">
       <section class="card">
-        <el-table :data="sources" v-loading="loadingSources" height="420">
-          <el-table-column prop="name" label="名称" min-width="150" />
-          <el-table-column prop="type" label="类型" width="140" />
-          <el-table-column prop="symbol" label="标的" width="120" />
-          <el-table-column label="频率" width="110">
-            <template #default="{ row }">{{ row.crawlIntervalMinutes }} 分钟</template>
-          </el-table-column>
-          <el-table-column label="状态" width="90">
-            <template #default="{ row }">
-              <el-tag :type="row.isEnabled ? 'success' : 'info'">{{ row.isEnabled ? '启用' : '停用' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="230" fixed="right">
-            <template #default="{ row }">
-              <el-button link type="primary" @click="run(row)">抓取</el-button>
-              <el-button link @click="edit(row)">编辑</el-button>
-              <el-button link @click="loadDocuments(row.id)">文档</el-button>
-              <el-popconfirm title="删除这个来源？" @confirm="remove(row.id)">
-                <template #reference>
-                  <el-button link type="danger">删除</el-button>
-                </template>
-              </el-popconfirm>
-            </template>
-          </el-table-column>
-        </el-table>
+        <div class="glass-list-view" v-loading="loadingSources" style="height: 420px; display: flex; flex-direction: column">
+          <div class="list-header" style="flex: 0 0 auto">
+            <div class="col-name" style="flex: 1.5">名称</div>
+            <div class="col-type hide-mobile" style="width: 140px">类型</div>
+            <div class="col-symbol hide-mobile" style="width: 100px">标的</div>
+            <div class="col-freq hide-mobile" style="width: 80px">频率</div>
+            <div class="col-status" style="width: 60px">状态</div>
+            <div class="col-actions" style="width: 160px; justify-content: flex-end; display: flex">操作</div>
+          </div>
+          <div class="list-body" style="flex: 1 1 auto; overflow-y: auto" v-if="sources.length > 0">
+            <div v-for="row in sources" :key="row.id" class="list-row">
+              <div class="col-name" style="flex: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                {{ row.name }}
+              </div>
+              <div class="col-type hide-mobile text-muted" style="width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ row.type }}</div>
+              <div class="col-symbol hide-mobile" style="width: 100px">{{ row.symbol }}</div>
+              <div class="col-freq hide-mobile text-muted number-font" style="width: 80px">{{ row.crawlIntervalMinutes }}m</div>
+              <div class="col-status" style="width: 60px">
+                <el-tag :type="row.isEnabled ? 'success' : 'info'" size="small" class="glass-tag">{{ row.isEnabled ? '启用' : '停用' }}</el-tag>
+              </div>
+              <div class="col-actions" style="width: 160px; justify-content: flex-end; display: flex; gap: 4px">
+                <el-button link type="primary" size="small" @click="run(row)">抓取</el-button>
+                <el-button link size="small" @click="edit(row)">编辑</el-button>
+                <el-button link size="small" @click="loadDocuments(row.id)">文档</el-button>
+                <el-popconfirm title="删除这个来源？" @confirm="remove(row.id)">
+                  <template #reference>
+                    <el-button link type="danger" size="small">删除</el-button>
+                  </template>
+                </el-popconfirm>
+              </div>
+            </div>
+          </div>
+          <div v-else class="empty-state">暂无来源数据</div>
+        </div>
       </section>
 
       <section class="card">
         <div class="section-title">采集文档</div>
-        <el-table :data="documents" v-loading="loadingDocs" height="420" @row-click="selectDoc">
-          <el-table-column prop="title" label="标题" min-width="200" />
-          <el-table-column prop="symbol" label="标的" width="110" />
-          <el-table-column prop="createdAt" label="入库时间" width="170">
-            <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="140" fixed="right">
-            <template #default="{ row }">
-              <el-button link type="primary" @click.stop="importAsReader(row.id)">转为阅读材料</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+        <div class="glass-list-view" v-loading="loadingDocs" style="height: 388px; display: flex; flex-direction: column">
+          <div class="list-header" style="flex: 0 0 auto">
+            <div class="col-title" style="flex: 1">标题</div>
+            <div class="col-symbol hide-mobile" style="width: 80px">标的</div>
+            <div class="col-time" style="width: 140px">入库时间</div>
+            <div class="col-actions" style="width: 80px; justify-content: flex-end; display: flex">操作</div>
+          </div>
+          <div class="list-body" style="flex: 1 1 auto; overflow-y: auto" v-if="documents.length > 0">
+            <div v-for="row in documents" :key="row.id" class="list-row clickable" :class="{ 'active': selectedDoc?.id === row.id }" @click="selectDoc(row)">
+              <div class="col-title" style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ row.title }}</div>
+              <div class="col-symbol hide-mobile" style="width: 80px">{{ row.symbol }}</div>
+              <div class="col-time number-font text-muted" style="width: 140px">{{ formatTime(row.createdAt) }}</div>
+              <div class="col-actions" style="width: 80px; justify-content: flex-end; display: flex">
+                <el-button link type="primary" size="small" @click.stop="importAsReader(row.id)">转阅读</el-button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="empty-state">暂无文档</div>
+        </div>
       </section>
     </div>
 
@@ -249,9 +265,78 @@ onMounted(async () => {
   }
 }
 
+/* Glass List View */
+.glass-list-view {
+  background: transparent;
+  border: 1px solid var(--qt-border);
+  border-radius: 8px;
+  overflow: hidden;
+
+  .list-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--qt-text-secondary);
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  .list-row {
+    display: flex;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 14px;
+    color: var(--qt-text);
+    transition: all 0.2s ease;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:hover {
+      background: color-mix(in srgb, #3b82f6 10%, transparent 90%);
+    }
+
+    &.clickable {
+      cursor: pointer;
+    }
+
+    &.active {
+      background: rgba(59, 130, 246, 0.2);
+    }
+  }
+
+  .text-muted { color: var(--qt-text-muted); }
+  .number-font { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+  .glass-tag {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--qt-border);
+  }
+
+  .empty-state {
+    padding: 40px;
+    text-align: center;
+    color: var(--qt-text-muted);
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
 @media (max-width: 960px) {
   .content-grid {
     grid-template-columns: 1fr;
+  }
+  
+  .glass-list-view {
+    .hide-mobile {
+      display: none !important;
+    }
   }
 }
 </style>

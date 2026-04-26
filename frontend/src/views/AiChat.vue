@@ -1,21 +1,21 @@
 <template>
   <div class="ai-chat-page">
-    <div class="page-header">
-      <h1>AI Chat</h1>
-      <div class="header-actions">
-        <el-button plain @click="createSession">
-          <el-icon><Plus /></el-icon>
-          新建会话
-        </el-button>
-        <el-button @click="clearCurrentSession">清空当前会话</el-button>
-      </div>
-    </div>
-
-    <div class="chat-shell card">
+    <div class="chat-shell">
       <aside class="session-panel">
         <div class="panel-title">
-          <span>历史会话</span>
-          <span class="session-count">{{ sessions.length }}</span>
+          <span>会话 ({{ sessions.length }})</span>
+          <div class="title-actions">
+            <el-tooltip content="新建会话" placement="top">
+              <el-button link class="action-btn" @click="createSession">
+                <el-icon><Plus /></el-icon>
+              </el-button>
+            </el-tooltip>
+            <el-tooltip content="清空当前" placement="top">
+              <el-button link class="action-btn" @click="clearCurrentSession">
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </el-tooltip>
+          </div>
         </div>
         <el-scrollbar class="session-scroll">
           <div
@@ -26,20 +26,13 @@
           >
             <div class="session-top">
               <span class="session-name" :title="session.title">{{ session.title }}</span>
-              <el-popconfirm
-                title="确认删除这个会话？"
-                width="180"
-                @confirm="deleteSession(session.id)"
-              >
-                <template #reference>
-                  <el-button
-                    text
-                    class="delete-btn"
-                    :icon="Delete"
-                    @click.stop
-                  />
-                </template>
-              </el-popconfirm>
+              <el-button
+                v-if="session.id === activeSessionId"
+                text
+                class="delete-btn"
+                :icon="Delete"
+                @click.stop="deleteSession(session.id)"
+              />
             </div>
             <div class="session-meta">
               <span>{{ formatTime(session.updatedAt) }}</span>
@@ -50,50 +43,33 @@
       </aside>
 
       <section class="chat-main">
-        <div class="chat-config">
-          <el-form label-width="84px" inline class="config-form">
-            <el-form-item label="模型源">
-              <el-select v-model="selectedProviderId" placeholder="选择模型源" style="width: 230px">
-                <el-option
-                  v-for="provider in providers"
-                  :key="provider.id"
-                  :label="provider.name"
-                  :value="provider.id"
-                />
+        <div class="chat-config glass-panel">
+          <div class="inline-toolbar">
+            <div class="toolbar-item">
+              <span class="toolbar-label">模型源</span>
+              <el-select v-model="selectedProviderId" class="glass-select" placeholder="选择模型源">
+                <el-option v-for="provider in providers" :key="provider.id" :label="provider.name" :value="provider.id" />
               </el-select>
-            </el-form-item>
-            <el-form-item label="模型">
-              <el-select v-model="selectedModel" placeholder="选择模型" style="width: 300px">
-                <el-option
-                  v-for="model in currentModels"
-                  :key="model"
-                  :label="model"
-                  :value="model"
-                />
+            </div>
+            <div class="toolbar-item">
+              <span class="toolbar-label">模型</span>
+              <el-select v-model="selectedModel" class="glass-select" placeholder="选择模型">
+                <el-option v-for="model in currentModels" :key="model" :label="model" :value="model" />
               </el-select>
-            </el-form-item>
-            <el-form-item label="Skill">
-              <el-select v-model="selectedSkillId" placeholder="可选：选择分析技能" clearable style="width: 230px">
-                <el-option
-                  v-for="skill in skillOptions"
-                  :key="skill.id"
-                  :label="skill.label"
-                  :value="skill.id"
-                />
+            </div>
+            <div class="toolbar-item">
+              <span class="toolbar-label">技能</span>
+              <el-select v-model="selectedSkillId" class="glass-select" placeholder="分析技能" clearable>
+                <el-option v-for="skill in skillOptions" :key="skill.id" :label="skill.label" :value="skill.id" />
               </el-select>
-            </el-form-item>
-            <el-form-item label="标的">
-              <el-input v-model="symbol" placeholder="可选，如 NVDA / 600519.SH" style="width: 230px" />
-            </el-form-item>
-          </el-form>
+            </div>
+            <div class="toolbar-item">
+              <span class="toolbar-label">标的</span>
+              <el-input v-model="symbol" class="glass-input-sm" placeholder="NVDA" />
+            </div>
+          </div>
           <div class="quick-prompts">
-            <span class="label">快捷问题：</span>
-            <el-button
-              v-for="prompt in quickPrompts"
-              :key="prompt"
-              size="small"
-              @click="applyPrompt(prompt)"
-            >
+            <el-button v-for="prompt in quickPrompts" :key="prompt" class="glass-tag-btn" @click="applyPrompt(prompt)">
               {{ prompt }}
             </el-button>
           </div>
@@ -107,77 +83,88 @@
           <div
             v-for="item in activeMessages"
             :key="item.id"
-            :class="['msg-item', item.role, { error: item.isError }]"
+            :class="['msg-wrapper', item.role]"
           >
-            <div class="msg-meta">
-              <span class="role">{{ item.role === 'user' ? '你' : 'AI' }}</span>
-              <span class="time">{{ formatTime(item.time) }}</span>
-              <span v-if="item.model" class="model">{{ item.model }}</span>
-              <el-button
-                v-if="item.role === 'assistant'"
-                link
-                size="small"
-                :loading="isSavingMemory(item.id)"
-                @click="saveAssistantMemory(item)"
-              >
-                保存记忆
-              </el-button>
-              <el-button
-                v-if="item.role === 'assistant'"
-                link
-                size="small"
-                class="render-toggle"
-                @click="toggleRawMode(item.id)"
-              >
-                {{ isRawMode(item.id) ? '渲染显示' : '查看原文' }}
-              </el-button>
-            </div>
+            <div :class="['msg-bubble', { error: item.isError }]">
+              <div class="msg-meta">
+                <span class="time">{{ formatTime(item.time) }}</span>
+                <span v-if="item.model" class="model">{{ item.model }}</span>
+                <el-button
+                  v-if="item.role === 'assistant'"
+                  link
+                  class="action-link"
+                  :loading="isSavingMemory(item.id)"
+                  @click="saveAssistantMemory(item)"
+                >
+                  <el-icon><Star /></el-icon>
+                </el-button>
+                <el-button
+                  v-if="item.role === 'assistant'"
+                  link
+                  class="action-link"
+                  @click="toggleRawMode(item.id)"
+                >
+                  <el-icon><Document /></el-icon>
+                </el-button>
+              </div>
 
-            <div
-              v-if="item.role === 'assistant' && item.marketContext"
-              class="market-context"
-            >
-              <span class="market-chip source">{{ item.marketContext.source }}</span>
-              <span class="market-chip symbol">{{ item.marketContext.symbol }}</span>
-              <span class="market-chip">行情时间 {{ formatQuoteTime(item.marketContext.quoteTime) }}</span>
-              <span class="market-chip">时延 {{ formatLag(item.marketContext.lagSeconds) }}</span>
-              <span :class="['market-chip', 'freshness', item.marketContext.freshness]">
-                {{ freshnessLabel(item.marketContext.freshness) }}
-              </span>
-            </div>
+              <div
+                v-if="item.role === 'assistant' && item.marketContext"
+                class="market-context"
+              >
+                <span class="market-chip source">{{ item.marketContext.source }}</span>
+                <span class="market-chip symbol">{{ item.marketContext.symbol }}</span>
+                <span class="market-chip">时间: {{ formatQuoteTime(item.marketContext.quoteTime) }}</span>
+                <span class="market-chip">延时: {{ formatLag(item.marketContext.lagSeconds) }}</span>
+                <span :class="['market-chip', 'freshness', item.marketContext.freshness]">
+                  {{ freshnessLabel(item.marketContext.freshness) }}
+                </span>
+              </div>
 
-            <pre v-if="item.role === 'assistant' && isRawMode(item.id)" class="msg-content raw-content">{{ item.content }}</pre>
-            <div
-              v-else-if="item.role === 'assistant'"
-              class="msg-content markdown-content"
-              v-html="renderedMessageMap[item.id]"
-            />
-            <div v-else class="msg-content user-content">
-              {{ item.content }}
+              <pre v-if="item.role === 'assistant' && isRawMode(item.id)" class="msg-content raw-content">{{ item.content }}</pre>
+              <div
+                v-else-if="item.role === 'assistant'"
+                class="msg-content markdown-content"
+                v-html="renderedMessageMap[item.id]"
+              />
+              <div v-else class="msg-content user-content">
+                {{ item.content }}
+              </div>
             </div>
           </div>
 
-          <el-skeleton v-if="sending" :rows="4" animated />
+          <div v-if="sending" class="msg-wrapper assistant">
+            <div class="msg-bubble typing-indicator">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
         </div>
 
-        <div class="chat-input">
-          <el-input
-            v-model="draftQuestion"
-            type="textarea"
-            :rows="4"
-            placeholder="输入股票或交易相关问题，回车发送（Shift+回车换行）"
-            @keydown.enter.prevent="handleEnter"
-          />
-          <div class="input-actions">
-            <el-tooltip content="先优化提问提示词" placement="top">
-              <el-button
-                circle
-                :icon="MagicStick"
-                :loading="optimizing"
-                @click="optimizeQuestion"
-              />
-            </el-tooltip>
-            <el-button type="primary" :loading="sending" @click="sendQuestion">发送</el-button>
+        <div class="chat-input-wrapper">
+          <div class="chat-input-glow">
+            <el-input
+              v-model="draftQuestion"
+              type="textarea"
+              :rows="3"
+              class="glass-chat-textarea"
+              placeholder="发送消息... (Enter 发送，Shift+Enter 换行)"
+              @keydown.enter.prevent="handleEnter"
+            />
+            <div class="input-actions">
+              <el-tooltip content="优化提示词" placement="top">
+                <el-button
+                  circle
+                  class="optimize-btn"
+                  :loading="optimizing"
+                  @click="optimizeQuestion"
+                >
+                  <el-icon><MagicStick /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-button type="primary" class="send-btn" :loading="sending" @click="sendQuestion">
+                <el-icon><Promotion /></el-icon>
+              </el-button>
+            </div>
           </div>
         </div>
       </section>
@@ -188,7 +175,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import dayjs from 'dayjs'
-import { Delete, MagicStick, Plus } from '@element-plus/icons-vue'
+import { Delete, Document, MagicStick, Plus, Promotion, Star } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { aiApi, configApi } from '@/api'
 import type { AiChatMarketContext, AiProviderConfig } from '@/types'
@@ -534,67 +521,76 @@ onMounted(async () => {
 
 <style lang="scss" scoped>
 .ai-chat-page {
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
+  height: calc(100vh - 60px);
+  padding: 16px;
+  box-sizing: border-box;
 
   .chat-shell {
-    display: grid;
-    grid-template-columns: 260px minmax(0, 1fr);
-    gap: 14px;
-    padding: 14px;
-    min-height: calc(100vh - 210px);
+    display: flex;
+    height: 100%;
+    gap: 16px;
   }
 
   .session-panel {
-    border: 1px solid var(--qt-border);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--qt-card-bg) 92%, #334155 8%);
-    overflow: hidden;
+    width: 260px;
+    background: transparent;
     display: flex;
     flex-direction: column;
+    border-right: 1px solid var(--qt-border);
+    padding-right: 16px;
   }
 
   .panel-title {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px;
-    border-bottom: 1px solid var(--qt-border);
+    padding: 12px 12px 8px;
+    font-size: 13px;
     font-weight: 600;
-    color: var(--qt-text-primary);
+    color: var(--qt-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    margin-bottom: 8px;
+    
+    .title-actions {
+      display: flex;
+      gap: 4px;
+    }
 
-    .session-count {
-      font-size: 12px;
+    .action-btn {
+      padding: 4px;
+      height: auto;
       color: var(--qt-text-muted);
-      font-weight: 500;
+      
+      &:hover { color: #3b82f6; }
     }
   }
 
   .session-scroll {
     flex: 1;
-    padding: 8px;
   }
 
   .session-item {
-    border: 1px solid var(--qt-border);
-    border-radius: 10px;
-    padding: 9px 10px;
-    margin-bottom: 8px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 4px;
     cursor: pointer;
     transition: all 0.2s ease;
+    border: 1px solid transparent;
 
     &:hover {
-      border-color: color-mix(in srgb, #3b82f6 55%, var(--qt-border) 45%);
-      background: color-mix(in srgb, var(--qt-card-bg) 90%, #3b82f6 10%);
+      background: color-mix(in srgb, var(--qt-card-bg) 80%, rgba(255,255,255,0.05) 20%);
     }
 
     &.active {
-      border-color: #3b82f6;
-      background: color-mix(in srgb, var(--qt-card-bg) 87%, #3b82f6 13%);
-      box-shadow: 0 0 0 1px color-mix(in srgb, #3b82f6 40%, transparent 60%);
+      background: color-mix(in srgb, #3b82f6 15%, transparent 85%);
+      border-color: color-mix(in srgb, #3b82f6 30%, transparent 70%);
+      
+      .session-name {
+        color: #fff;
+        font-weight: 500;
+      }
     }
   }
 
@@ -607,123 +603,181 @@ onMounted(async () => {
 
   .session-name {
     font-size: 13px;
-    font-weight: 600;
-    color: var(--qt-text-primary);
+    color: var(--qt-text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     flex: 1;
+    transition: color 0.2s;
   }
 
   .delete-btn {
-    color: #ef4444;
-    padding: 0;
-    min-height: auto;
+    color: var(--qt-text-muted);
+    padding: 4px;
+    height: auto;
+    &:hover { color: #ef4444; }
   }
 
   .session-meta {
-    margin-top: 6px;
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
+    margin-top: 4px;
+    font-size: 11px;
     color: var(--qt-text-muted);
   }
 
+  /* Chat Main */
   .chat-main {
-    min-width: 0;
+    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    min-width: 0;
+    position: relative;
   }
 
   .chat-config {
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: var(--qt-surface-glass);
     border: 1px solid var(--qt-border);
-    border-radius: 10px;
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--qt-card-bg) 95%, #64748b 5%) 0%,
-      color-mix(in srgb, var(--qt-card-bg) 100%, #64748b 0%) 100%
-    );
-    padding: 12px;
-  }
+    backdrop-filter: blur(12px);
 
-  .config-form {
-    margin-bottom: 6px;
-  }
+    .inline-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
 
-  .quick-prompts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
+    .toolbar-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
 
-    .label {
+      .toolbar-label {
+        font-size: 12px;
+        color: var(--qt-text-secondary);
+        font-weight: 500;
+      }
+    }
+
+    .glass-select, .glass-input-sm {
+      :deep(.el-input__wrapper) {
+        background: rgba(0, 0, 0, 0.2);
+        box-shadow: 0 0 0 1px var(--qt-border);
+        border-radius: 6px;
+        
+        &:hover, &.is-focus {
+          box-shadow: 0 0 0 1px #3b82f6;
+        }
+      }
+      :deep(input) {
+        color: var(--qt-text);
+        font-size: 13px;
+      }
+    }
+
+    .glass-select { width: 140px; }
+    .glass-input-sm { width: 100px; }
+
+    .quick-prompts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .glass-tag-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--qt-border);
+      color: var(--qt-text-secondary);
+      border-radius: 6px;
+      padding: 4px 12px;
+      height: auto;
       font-size: 12px;
-      color: var(--qt-text-muted);
-      margin-right: 2px;
+      transition: all 0.2s;
+      
+      &:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: var(--qt-text);
+        border-color: color-mix(in srgb, var(--qt-border) 50%, #fff 50%);
+      }
     }
   }
 
   .chat-messages {
     flex: 1;
-    min-height: 380px;
-    max-height: calc(100vh - 420px);
     overflow-y: auto;
-    border: 1px solid var(--qt-border);
-    border-radius: 10px;
-    padding: 12px;
-    background: color-mix(in srgb, var(--qt-card-bg) 95%, #64748b 5%);
+    padding-right: 12px;
+    margin-bottom: 24px;
+    
+    /* Scrollbar minimal */
+    &::-webkit-scrollbar { width: 6px; }
+    &::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
   }
 
   .empty-tip {
+    text-align: center;
+    margin-top: 100px;
     color: var(--qt-text-muted);
-    font-size: 13px;
-    padding: 8px 4px;
+    font-size: 14px;
   }
 
-  .msg-item {
-    border: 1px solid var(--qt-border);
-    border-radius: 10px;
-    padding: 12px;
-    margin-bottom: 12px;
-    background: var(--qt-card-bg);
-
+  /* Chat Bubbles (Linear/Cursor style) */
+  .msg-wrapper {
+    display: flex;
+    margin-bottom: 24px;
+    
     &.user {
-      border-color: color-mix(in srgb, #3b82f6 35%, var(--qt-border) 65%);
+      justify-content: flex-end;
+      .msg-bubble {
+        background: color-mix(in srgb, #3b82f6 20%, transparent 80%);
+        border: 1px solid color-mix(in srgb, #3b82f6 30%, transparent 70%);
+        color: #e2e8f0;
+        border-radius: 16px 16px 4px 16px;
+        max-width: 75%;
+      }
     }
-
+    
     &.assistant {
-      border-color: color-mix(in srgb, #64748b 20%, var(--qt-border) 80%);
+      justify-content: flex-start;
+      .msg-bubble {
+        background: transparent;
+        color: var(--qt-text);
+        max-width: 90%;
+      }
     }
+  }
+
+  .msg-bubble {
+    padding: 12px 16px;
+    font-size: 14px;
+    line-height: 1.6;
+    position: relative;
 
     &.error {
-      border-color: color-mix(in srgb, #ef4444 45%, var(--qt-border) 55%);
-      background: color-mix(in srgb, var(--qt-card-bg) 90%, #ef4444 10%);
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 12px;
     }
   }
 
   .msg-meta {
     display: flex;
-    gap: 8px;
     align-items: center;
-    flex-wrap: wrap;
-    font-size: 12px;
-    color: var(--qt-text-muted);
+    gap: 12px;
     margin-bottom: 8px;
-
-    .role {
-      font-weight: 700;
-      color: var(--qt-text-primary);
-    }
+    font-size: 11px;
+    color: var(--qt-text-muted);
 
     .model {
-      color: #2563eb;
+      color: #3b82f6;
+      font-weight: 500;
     }
 
-    .render-toggle {
+    .action-link {
       padding: 0;
-      font-size: 12px;
-      margin-left: auto;
+      height: auto;
+      color: var(--qt-text-muted);
+      &:hover { color: #3b82f6; }
     }
   }
 
@@ -731,68 +785,134 @@ onMounted(async () => {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-bottom: 8px;
+    margin-bottom: 12px;
   }
 
   .market-chip {
-    display: inline-flex;
-    align-items: center;
     padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--qt-border);
     color: var(--qt-text-secondary);
-    border: 1px solid color-mix(in srgb, var(--qt-border) 88%, #94a3b8 12%);
-    background: color-mix(in srgb, var(--qt-card-bg) 94%, #64748b 6%);
 
-    &.source {
-      color: #334155;
-      border-color: color-mix(in srgb, #64748b 32%, var(--qt-border) 68%);
-    }
-
-    &.symbol {
-      color: #1d4ed8;
-      border-color: color-mix(in srgb, #3b82f6 45%, var(--qt-border) 55%);
-    }
-
-    &.freshness.realtime {
-      color: #0f766e;
-      border-color: color-mix(in srgb, #14b8a6 48%, var(--qt-border) 52%);
-      background: color-mix(in srgb, #14b8a6 16%, var(--qt-card-bg) 84%);
-    }
-
-    &.freshness.delayed_close {
-      color: #92400e;
-      border-color: color-mix(in srgb, #f59e0b 50%, var(--qt-border) 50%);
-      background: color-mix(in srgb, #f59e0b 16%, var(--qt-card-bg) 84%);
-    }
-
-    &.freshness.stale {
-      color: #991b1b;
-      border-color: color-mix(in srgb, #ef4444 55%, var(--qt-border) 45%);
-      background: color-mix(in srgb, #ef4444 14%, var(--qt-card-bg) 86%);
-    }
+    &.symbol { color: #60a5fa; border-color: rgba(96, 165, 250, 0.3); }
+    &.freshness.realtime { color: #34d399; }
+    &.freshness.stale { color: #f87171; }
   }
 
   .msg-content {
-    margin: 0;
-    font-size: 14px;
-    line-height: 1.75;
-    color: var(--qt-text-primary);
-    overflow-wrap: anywhere;
     word-break: break-word;
+    
+    &.raw-content {
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 13px;
+      background: rgba(0,0,0,0.3);
+      padding: 12px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+    }
+
+    &.user-content {
+      white-space: pre-wrap;
+    }
   }
 
-  .user-content {
-    white-space: pre-wrap;
+  /* Typing Indicator */
+  .typing-indicator {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding: 12px 16px;
+    
+    span {
+      display: block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--qt-text-muted);
+      animation: typing 1.4s infinite ease-in-out both;
+      
+      &:nth-child(1) { animation-delay: -0.32s; }
+      &:nth-child(2) { animation-delay: -0.16s; }
+    }
   }
 
-  .raw-content {
-    white-space: pre-wrap;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    background: color-mix(in srgb, var(--qt-card-bg) 87%, #0f172a 13%);
-    border-radius: 8px;
-    border: 1px solid var(--qt-border);
-    padding: 10px;
+  @keyframes typing {
+    0%, 80%, 100% { transform: scale(0); }
+    40% { transform: scale(1); }
+  }
+
+  /* Floating Chat Input */
+  .chat-input-wrapper {
+    position: relative;
+    padding: 0 10%;
+  }
+
+  .chat-input-glow {
+    position: relative;
+    background: var(--qt-surface-glass);
+    border: 1px solid color-mix(in srgb, #3b82f6 40%, var(--qt-border) 60%);
+    border-radius: 16px;
+    backdrop-filter: blur(20px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px inset rgba(255,255,255,0.05);
+    transition: box-shadow 0.3s ease;
+    
+    &:focus-within {
+      box-shadow: 0 8px 32px rgba(59, 130, 246, 0.15), 0 0 0 1px inset rgba(59, 130, 246, 0.2);
+    }
+
+    .glass-chat-textarea {
+      :deep(.el-textarea__inner) {
+        background: transparent;
+        box-shadow: none;
+        border: none;
+        color: var(--qt-text);
+        font-size: 14px;
+        padding: 16px 60px 16px 20px;
+        resize: none;
+        
+        &::placeholder {
+          color: var(--qt-text-muted);
+        }
+      }
+    }
+
+    .input-actions {
+      position: absolute;
+      right: 12px;
+      bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .optimize-btn {
+      background: transparent;
+      border: none;
+      color: var(--qt-text-secondary);
+      &:hover { color: var(--qt-text); background: rgba(255,255,255,0.1); }
+    }
+
+    .send-btn {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border-radius: 50%;
+      background: #3b82f6;
+      border: none;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+      transition: all 0.2s;
+      
+      &:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
+      }
+      
+      .el-icon {
+        font-size: 16px;
+      }
+    }
   }
 
   .markdown-content {

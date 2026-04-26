@@ -16,37 +16,51 @@
       </div>
     </div>
 
-    <el-alert
-      class="reader-tips"
-      type="info"
-      :closable="false"
-      show-icon
-      title="支持上传 EPUB/PDF，也可以在“信息采集”页面把采集文档一键转为阅读材料。"
-    />
+    <div class="glass-alert">
+      <el-icon class="alert-icon"><InfoFilled /></el-icon>
+      <span class="alert-content">支持上传 EPUB/PDF，也可以在“信息采集”页面把采集文档一键转为阅读材料。</span>
+    </div>
 
-    <section class="card">
-      <el-table :data="books" v-loading="loading" height="520">
-        <el-table-column prop="title" label="标题" min-width="220" />
-        <el-table-column prop="format" label="格式" width="100" />
-        <el-table-column prop="sourceType" label="来源" width="120" />
-        <el-table-column label="大小" width="130">
-          <template #default="{ row }">{{ formatSize(row.fileSize) }}</template>
-        </el-table-column>
-        <el-table-column label="更新时间" width="180">
-          <template #default="{ row }">{{ formatTime(row.updatedAt) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
-          <template #default="{ row }">
+    <div v-if="!loading && books.length === 0" class="empty-state glass-panel">
+      暂无图书，请点击右上角上传。
+    </div>
+
+    <div v-else class="glass-list-view" v-loading="loading">
+      <div class="list-header">
+        <div class="col-title">标题</div>
+        <div class="col-format">格式</div>
+        <div class="col-source">来源</div>
+        <div class="col-size">大小</div>
+        <div class="col-time">更新时间</div>
+        <div class="col-actions">操作</div>
+      </div>
+      
+      <div class="list-body">
+        <div 
+          v-for="row in books" 
+          :key="row.id" 
+          class="list-row"
+          @click="openBook(row.id)"
+        >
+          <div class="col-title">
+            <el-icon class="book-icon"><Document /></el-icon>
+            <span class="book-title">{{ row.title }}</span>
+          </div>
+          <div class="col-format"><span class="format-tag">{{ row.format }}</span></div>
+          <div class="col-source">{{ row.sourceType }}</div>
+          <div class="col-size">{{ formatSize(row.fileSize) }}</div>
+          <div class="col-time">{{ formatTime(row.updatedAt) }}</div>
+          <div class="col-actions" @click.stop>
             <el-button link type="primary" @click="openBook(row.id)">打开</el-button>
             <el-popconfirm title="确认删除这本书？" @confirm="removeBook(row.id)">
               <template #reference>
                 <el-button link type="danger">删除</el-button>
               </template>
             </el-popconfirm>
-          </template>
-        </el-table-column>
-      </el-table>
-    </section>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -55,6 +69,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
+import { Document, InfoFilled } from '@element-plus/icons-vue'
 import { readerApi } from '@/api'
 import type { ReaderBook } from '@/types'
 
@@ -165,15 +180,146 @@ onMounted(async () => {
 </script>
 
 <style scoped lang="scss">
-.reader-tips {
-  margin-bottom: 16px;
+.page-header {
+  margin-bottom: 24px;
 }
 
-.card {
-  padding: 16px;
+.glass-alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: color-mix(in srgb, #3b82f6 10%, var(--qt-card-bg) 90%);
+  border: 1px solid color-mix(in srgb, #3b82f6 30%, var(--qt-border) 70%);
+  border-radius: 10px;
+  margin-bottom: 24px;
+  backdrop-filter: blur(12px);
+
+  .alert-icon {
+    font-size: 18px;
+    color: #3b82f6;
+  }
+
+  .alert-content {
+    font-size: 13px;
+    color: var(--qt-text);
+  }
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px 0;
+  color: var(--qt-text-muted);
+}
+
+.glass-list-view {
+  background: var(--qt-surface-glass);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--qt-border);
+  border-radius: 12px;
+  overflow: hidden;
+
+  .list-header {
+    display: flex;
+    align-items: center;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--qt-text-secondary);
+    background: rgba(0, 0, 0, 0.1);
+  }
+
+  .list-row {
+    display: flex;
+    align-items: center;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 13px;
+    color: var(--qt-text);
+    transition: all 0.2s ease;
+    cursor: pointer;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:hover {
+      background: color-mix(in srgb, #3b82f6 8%, transparent 92%);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, #3b82f6 20%, transparent 80%);
+    }
+  }
+
+  /* 栅格分列 */
+  .col-title {
+    flex: 1;
+    min-width: 200px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+    
+    .book-icon {
+      font-size: 16px;
+      color: #3b82f6;
+    }
+
+    .book-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+
+  .col-format {
+    width: 100px;
+    
+    .format-tag {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--qt-border);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      color: var(--qt-text-secondary);
+      text-transform: uppercase;
+    }
+  }
+
+  .col-source {
+    width: 120px;
+    color: var(--qt-text-secondary);
+  }
+
+  .col-size {
+    width: 120px;
+    color: var(--qt-text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  .col-time {
+    width: 160px;
+    color: var(--qt-text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  .col-actions {
+    width: 120px;
+    text-align: right;
+  }
 }
 
 .hidden-input {
   display: none;
+}
+
+@media (max-width: 960px) {
+  .glass-list-view {
+    .col-source, .col-size, .col-time {
+      display: none;
+    }
+    .col-title {
+      min-width: 0;
+    }
+  }
 }
 </style>

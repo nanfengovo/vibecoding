@@ -33,38 +33,36 @@
           创建规则
         </el-button>
       </div>
-      <el-table :data="monitorRules" style="width: 100%">
-        <el-table-column prop="name" label="规则名称" width="180" />
-        <el-table-column prop="symbols" label="监控股票">
-          <template #default="{ row }">
-            <el-tag v-for="s in row.symbols.slice(0, 3)" :key="s" size="small" class="symbol-tag">
-              {{ s }}
-            </el-tag>
-            <el-tag v-if="row.symbols.length > 3" size="small" type="info">
-              +{{ row.symbols.length - 3 }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="conditions" label="触发条件">
-          <template #default="{ row }">
-            {{ formatConditions(row.conditions) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="isActive" label="状态" width="100">
-          <template #default="{ row }">
-            <el-switch 
-              v-model="row.isActive" 
-              @change="toggleRule(row.id, row.isActive)"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="editRule(row)">编辑</el-button>
-            <el-button link type="danger" size="small" @click="deleteRule(row.id)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="glass-list-view rules-table">
+        <div class="list-header">
+          <div class="col-rule-name">规则名称</div>
+          <div class="col-symbols">监控股票</div>
+          <div class="col-conditions">触发条件</div>
+          <div class="col-status">状态</div>
+          <div class="col-actions" style="width: 120px">操作</div>
+        </div>
+        <div class="list-body" v-if="monitorRules.length > 0">
+          <div v-for="row in monitorRules" :key="row.id" class="list-row">
+            <div class="col-rule-name">{{ row.name }}</div>
+            <div class="col-symbols">
+              <span v-for="s in row.symbols.slice(0, 3)" :key="s" class="symbol-tag">{{ s }}</span>
+              <span v-if="row.symbols.length > 3" class="symbol-tag text-muted">+{{ row.symbols.length - 3 }}</span>
+            </div>
+            <div class="col-conditions text-muted">{{ formatConditions(row.conditions) }}</div>
+            <div class="col-status">
+              <el-switch 
+                v-model="row.isActive" 
+                @change="toggleRule(row.id, row.isActive)"
+              />
+            </div>
+            <div class="col-actions" style="width: 120px">
+              <el-button link type="primary" size="small" @click="editRule(row)">编辑</el-button>
+              <el-button link type="danger" size="small" @click="deleteRule(row.id)">删除</el-button>
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-state">暂无监控规则</div>
+      </div>
     </div>
 
     <!-- 关注列表 -->
@@ -82,82 +80,48 @@
       </div>
 
       <!-- 表格视图 -->
-      <el-table 
-        v-if="viewMode === 'table'" 
-        :data="filteredWatchlist" 
-        style="width: 100%"
-        @row-click="handleRowClick"
-      >
-        <el-table-column prop="symbol" label="代码" width="100">
-          <template #default="{ row }">
-            <el-link type="primary">{{ row.symbol }}</el-link>
-          </template>
-        </el-table-column>
-        <el-table-column prop="name" label="名称" width="180">
-          <template #default="{ row }">
-            {{ getDisplayName(row) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="current" label="现价" width="100">
-          <template #default="{ row }">
-            <span :class="(getQuote(row.symbol)?.change ?? 0) >= 0 ? 'price-up' : 'price-down'">
-              {{ formatPrice(getCurrentPrice(row), row.symbol, row.stock?.market) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="change" label="涨跌" width="100">
-          <template #default="{ row }">
-            <span :class="(getQuote(row.symbol)?.change ?? 0) >= 0 ? 'price-up' : 'price-down'">
-              {{ formatChange(getQuote(row.symbol)?.change) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="changePercent" label="涨跌幅" width="100">
-          <template #default="{ row }">
-            <span :class="(getQuote(row.symbol)?.changePercent ?? 0) >= 0 ? 'price-up' : 'price-down'">
-              {{ formatPercent(getQuote(row.symbol)?.changePercent) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="volume" label="成交量" width="120">
-          <template #default="{ row }">
-            {{ formatVolume(getQuote(row.symbol)?.volume) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="high" label="最高" width="100">
-          <template #default="{ row }">
-            {{ formatPrice(getDayHigh(row), row.symbol, row.stock?.market) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="low" label="最低" width="100">
-          <template #default="{ row }">
-            {{ formatPrice(getDayLow(row), row.symbol, row.stock?.market) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="notes" label="备注">
-          <template #default="{ row }">
-            <span class="notes">{{ row.notes || '-' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right">
-          <template #default="{ row }">
-            <el-button
-              link
-              type="primary"
-              size="small"
-              @click.stop="showCompanyDetail(row.symbol)"
-            >
-              详情
-            </el-button>
-            <el-button 
-              link 
-              type="danger" 
-              :icon="Delete" 
-              @click.stop="removeStock(row.id)"
-            />
-          </template>
-        </el-table-column>
-      </el-table>
+      <div v-if="viewMode === 'table'" class="glass-list-view watch-table">
+        <div class="list-header">
+          <div class="col-symbol">代码</div>
+          <div class="col-name">名称</div>
+          <div class="col-price" style="text-align: right">现价</div>
+          <div class="col-change" style="text-align: right">涨跌幅</div>
+          <div class="col-volume hide-mobile" style="text-align: right">成交量</div>
+          <div class="col-high hide-mobile" style="text-align: right">最高</div>
+          <div class="col-low hide-mobile" style="text-align: right">最低</div>
+          <div class="col-actions" style="width: 140px; justify-content: flex-end">操作</div>
+        </div>
+        <div class="list-body" v-if="filteredWatchlist.length > 0">
+          <div v-for="row in filteredWatchlist" :key="row.id" class="list-row" @click="handleRowClick(row)">
+            <div class="col-symbol text-blue">{{ row.symbol }}</div>
+            <div class="col-name">{{ getDisplayName(row) }}</div>
+            <div class="col-price number-font" style="text-align: right">
+              <span :class="(getQuote(row.symbol)?.change ?? 0) >= 0 ? 'color-up' : 'color-down'">
+                {{ formatPrice(getCurrentPrice(row), row.symbol, row.stock?.market) }}
+              </span>
+            </div>
+            <div class="col-change number-font" style="text-align: right">
+              <span :class="(getQuote(row.symbol)?.changePercent ?? 0) >= 0 ? 'color-up' : 'color-down'">
+                {{ formatPercent(getQuote(row.symbol)?.changePercent) }}
+              </span>
+            </div>
+            <div class="col-volume number-font text-muted hide-mobile" style="text-align: right">
+              {{ formatVolume(getQuote(row.symbol)?.volume) }}
+            </div>
+            <div class="col-high number-font text-muted hide-mobile" style="text-align: right">
+              {{ formatPrice(getDayHigh(row), row.symbol, row.stock?.market) }}
+            </div>
+            <div class="col-low number-font text-muted hide-mobile" style="text-align: right">
+              {{ formatPrice(getDayLow(row), row.symbol, row.stock?.market) }}
+            </div>
+            <div class="col-actions" style="width: 140px; justify-content: flex-end">
+              <el-button link type="primary" size="small" @click.stop="showCompanyDetail(row.symbol)">详情</el-button>
+              <el-button link type="danger" :icon="Delete" @click.stop="removeStock(row.id)" />
+            </div>
+          </div>
+        </div>
+        <div v-else class="empty-state">暂无相关股票</div>
+      </div>
 
       <!-- 卡片视图 -->
       <div v-else class="card-grid">
@@ -207,26 +171,82 @@
     >
       <el-skeleton v-if="detailLoading" :rows="8" animated />
       <template v-else-if="selectedStockDetail">
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="代码">{{ selectedStockDetail.symbol }}</el-descriptions-item>
-          <el-descriptions-item label="名称">{{ getDisplayName(selectedStockDetail) }}</el-descriptions-item>
-          <el-descriptions-item label="市场">{{ selectedStockDetail.market || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="现价">{{ formatPrice(selectedStockDetail.currentPrice, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
-          <el-descriptions-item label="昨收">{{ formatPrice(selectedStockDetail.previousClose, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
-          <el-descriptions-item label="涨跌幅">{{ formatPercent(selectedStockDetail.changePercent) }}</el-descriptions-item>
-          <el-descriptions-item label="开盘">{{ formatPrice(selectedStockDetail.open, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
-          <el-descriptions-item label="最高">{{ formatPrice(selectedStockDetail.high, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
-          <el-descriptions-item label="最低">{{ formatPrice(selectedStockDetail.low, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
-          <el-descriptions-item label="成交量">{{ formatVolume(selectedStockDetail.volume) }}</el-descriptions-item>
-          <el-descriptions-item label="市值">{{ formatMarketCap(selectedStockDetail.marketCap, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
-          <el-descriptions-item label="市盈率">{{ formatPlainNumber(selectedStockDetail.pe) }}</el-descriptions-item>
-          <el-descriptions-item label="每股收益">{{ formatPlainNumber(selectedStockDetail.eps) }}</el-descriptions-item>
-          <el-descriptions-item label="股息率">{{ formatPercent(selectedStockDetail.dividend) }}</el-descriptions-item>
-          <el-descriptions-item label="52周最高">{{ formatPrice(selectedStockDetail.high52Week, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
-          <el-descriptions-item label="52周最低">{{ formatPrice(selectedStockDetail.low52Week, selectedStockDetail.symbol, selectedStockDetail.market) }}</el-descriptions-item>
-          <el-descriptions-item label="平均成交量">{{ formatVolume(selectedStockDetail.avgVolume) }}</el-descriptions-item>
-          <el-descriptions-item label="行情时间">{{ formatDateTime(selectedStockDetail.updatedAt) }}</el-descriptions-item>
-        </el-descriptions>
+        <div class="glass-descriptions">
+          <div class="desc-item">
+            <span class="desc-label">代码</span>
+            <span class="desc-value text-blue number-font">{{ selectedStockDetail.symbol }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">名称</span>
+            <span class="desc-value">{{ getDisplayName(selectedStockDetail) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">市场</span>
+            <span class="desc-value">{{ selectedStockDetail.market || '-' }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">现价</span>
+            <span class="desc-value number-font">{{ formatPrice(selectedStockDetail.currentPrice, selectedStockDetail.symbol, selectedStockDetail.market) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">昨收</span>
+            <span class="desc-value number-font">{{ formatPrice(selectedStockDetail.previousClose, selectedStockDetail.symbol, selectedStockDetail.market) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">涨跌幅</span>
+            <span class="desc-value number-font" :class="(selectedStockDetail.changePercent ?? 0) >= 0 ? 'color-up' : 'color-down'">
+              {{ formatPercent(selectedStockDetail.changePercent) }}
+            </span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">开盘</span>
+            <span class="desc-value number-font">{{ formatPrice(selectedStockDetail.open, selectedStockDetail.symbol, selectedStockDetail.market) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">最高</span>
+            <span class="desc-value number-font">{{ formatPrice(selectedStockDetail.high, selectedStockDetail.symbol, selectedStockDetail.market) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">最低</span>
+            <span class="desc-value number-font">{{ formatPrice(selectedStockDetail.low, selectedStockDetail.symbol, selectedStockDetail.market) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">成交量</span>
+            <span class="desc-value number-font">{{ formatVolume(selectedStockDetail.volume) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">市值</span>
+            <span class="desc-value number-font">{{ formatMarketCap(selectedStockDetail.marketCap, selectedStockDetail.symbol, selectedStockDetail.market) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">市盈率</span>
+            <span class="desc-value number-font">{{ formatPlainNumber(selectedStockDetail.pe) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">每股收益</span>
+            <span class="desc-value number-font">{{ formatPlainNumber(selectedStockDetail.eps) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">股息率</span>
+            <span class="desc-value number-font">{{ formatPercent(selectedStockDetail.dividend) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">52周最高</span>
+            <span class="desc-value number-font">{{ formatPrice(selectedStockDetail.high52Week, selectedStockDetail.symbol, selectedStockDetail.market) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">52周最低</span>
+            <span class="desc-value number-font">{{ formatPrice(selectedStockDetail.low52Week, selectedStockDetail.symbol, selectedStockDetail.market) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">平均成交量</span>
+            <span class="desc-value number-font">{{ formatVolume(selectedStockDetail.avgVolume) }}</span>
+          </div>
+          <div class="desc-item">
+            <span class="desc-label">行情时间</span>
+            <span class="desc-value number-font">{{ formatDateTime(selectedStockDetail.updatedAt) }}</span>
+          </div>
+        </div>
 
         <div class="company-profile-block">
           <div class="company-profile-header">
@@ -240,21 +260,19 @@
             <div class="company-overview">
               {{ companyProfile.overview || '暂无公司简介。' }}
             </div>
-            <el-descriptions
+            <div
               v-if="companyProfile.fields.length > 0"
-              :column="2"
-              border
-              size="small"
-              class="company-extra-fields"
+              class="glass-descriptions company-extra-fields"
             >
-              <el-descriptions-item
+              <div
                 v-for="item in companyProfile.fields"
                 :key="`${item.key}-${item.value}`"
-                :label="item.key"
+                class="desc-item"
               >
-                {{ item.value }}
-              </el-descriptions-item>
-            </el-descriptions>
+                <span class="desc-label">{{ item.key }}</span>
+                <span class="desc-value">{{ item.value }}</span>
+              </div>
+            </div>
             <div v-if="companyProfile.sourceUrl" class="company-source">
               来源：
               <el-link :href="companyProfile.sourceUrl" target="_blank" type="primary">Longbridge</el-link>
@@ -1008,6 +1026,115 @@ onMounted(async () => {
     color: var(--qt-text-muted);
     font-size: 12px;
   }
+
+  /* Glass List View for Watchlist */
+  .glass-list-view {
+    background: transparent;
+    border: 1px solid var(--qt-border);
+    border-radius: 8px;
+    overflow: hidden;
+
+    .list-header {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--qt-border);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--qt-text-secondary);
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .list-row {
+      display: flex;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--qt-border);
+      font-size: 14px;
+      color: var(--qt-text);
+      transition: all 0.2s ease;
+      cursor: pointer;
+
+      &:last-child {
+        border-bottom: none;
+      }
+
+      &:hover {
+        background: color-mix(in srgb, #3b82f6 10%, transparent 90%);
+      }
+    }
+
+    /* Rules Table Columns */
+    &.rules-table {
+      .col-rule-name { width: 160px; font-weight: 500; }
+      .col-symbols { flex: 1; display: flex; gap: 4px; flex-wrap: wrap; }
+      .col-conditions { flex: 2; font-size: 13px; }
+      .col-status { width: 100px; }
+    }
+
+    /* Watch Table Columns */
+    &.watch-table {
+      .col-symbol { width: 100px; font-weight: 500; }
+      .col-name { flex: 1.5; color: var(--qt-text-secondary); }
+      .col-price { width: 100px; }
+      .col-change { width: 100px; }
+      .col-volume { width: 100px; }
+      .col-high { width: 100px; }
+      .col-low { width: 100px; }
+    }
+
+    .col-actions { display: flex; gap: 8px; }
+
+    .text-blue { color: #3b82f6; }
+    .text-muted { color: var(--qt-text-muted); }
+    .number-font { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+    .symbol-tag {
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--qt-border);
+      font-size: 12px;
+    }
+
+    .empty-state {
+      padding: 40px;
+      text-align: center;
+      color: var(--qt-text-muted);
+    }
+  }
+
+  /* Glass Descriptions for Details */
+  .glass-descriptions {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    background: transparent;
+    border: 1px solid var(--qt-border);
+    border-radius: 8px;
+    padding: 16px;
+
+    .desc-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+
+      .desc-label {
+        font-size: 13px;
+        color: var(--qt-text-secondary);
+      }
+
+      .desc-value {
+        font-size: 14px;
+        color: var(--qt-text);
+        text-align: right;
+      }
+    }
+  }
 }
 
 @media (max-width: 960px) {
@@ -1020,6 +1147,20 @@ onMounted(async () => {
       .condition-row {
         flex-wrap: wrap;
       }
+    }
+
+    .glass-list-view {
+      .hide-mobile {
+        display: none !important;
+      }
+      .col-name { flex: 1; }
+      .list-row {
+        padding: 12px;
+      }
+    }
+
+    .glass-descriptions {
+      grid-template-columns: 1fr;
     }
   }
 }

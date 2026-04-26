@@ -59,8 +59,11 @@ declare module 'vue' {
     ElTag: typeof import('element-plus/es')['ElTag']
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     ElUpload: typeof import('element-plus/es')['ElUpload']
+    MetricCard: typeof import('./components/dashboard/MetricCard.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    StockCard: typeof import('./components/dashboard/StockCard.vue')['default']
+    TimeframeTabs: typeof import('./components/dashboard/TimeframeTabs.vue')['default']
   }
   export interface ComponentCustomProperties {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']
