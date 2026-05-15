@@ -50,12 +50,18 @@ public sealed class StockAnalysisResult
 
 public sealed class AiChatInput
 {
+    public int UserId { get; init; }
+    public long? SessionId { get; init; }
     public string Question { get; init; } = string.Empty;
     public string Symbol { get; init; } = string.Empty;
     public string Focus { get; init; } = string.Empty;
     public string SkillId { get; init; } = string.Empty;
     public string ProviderId { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
+    public string ExecutionMode { get; init; } = string.Empty;
+    public string ToolPolicy { get; init; } = string.Empty;
+    public string MemoryProfile { get; init; } = string.Empty;
+    public IReadOnlyList<string> AllowToolCategories { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> ConversationContext { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> MemoryContext { get; init; } = Array.Empty<string>();
     public IReadOnlyList<AiKnowledgeReference> KnowledgeContext { get; init; } = Array.Empty<AiKnowledgeReference>();
@@ -79,6 +85,10 @@ public sealed class AiChatResult
     public AiChatMarketContext? MarketContext { get; init; }
     public long? SessionId { get; init; }
     public List<AiKnowledgeReference> References { get; init; } = new();
+    public string Orchestrator { get; init; } = "legacy";
+    public bool FallbackApplied { get; init; }
+    public bool ShadowCompared { get; init; }
+    public List<AiToolTracePublicItem> ToolTracePublic { get; init; } = new();
 }
 
 public sealed class AiChatMarketContext
@@ -101,6 +111,14 @@ public sealed class AiKnowledgeReference
     public string Title { get; init; } = string.Empty;
     public string SourceUrl { get; init; } = string.Empty;
     public string Snippet { get; init; } = string.Empty;
+}
+
+public sealed class AiToolTracePublicItem
+{
+    public string ToolName { get; init; } = string.Empty;
+    public string Source { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public int LatencyMs { get; init; }
 }
 
 public sealed class AiPromptOptimizeInput

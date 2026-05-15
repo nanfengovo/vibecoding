@@ -292,6 +292,17 @@ export interface AiChatResult {
   marketContext?: AiChatMarketContext
   sessionId?: number
   references?: AiKnowledgeReference[]
+  orchestrator?: string
+  fallbackApplied?: boolean
+  shadowCompared?: boolean
+  toolTracePublic?: AiToolTracePublicItem[]
+}
+
+export interface AiToolTracePublicItem {
+  toolName: string
+  source: string
+  status: string
+  latencyMs: number
 }
 
 export interface AiChatReaderContext {

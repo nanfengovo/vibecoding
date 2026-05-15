@@ -609,6 +609,10 @@ export const aiApi = {
       sessionId?: number
       knowledgeBaseId?: number
       useMemory?: boolean
+      executionMode?: 'legacy' | 'shadow' | 'fallback' | 'maf'
+      toolPolicy?: 'auto' | 'mcp_first' | 'local_only'
+      memoryProfile?: 'session_only' | 'session_plus_knowledge'
+      allowToolCategories?: string[]
       readerContext?: {
         bookId: number
         title: string

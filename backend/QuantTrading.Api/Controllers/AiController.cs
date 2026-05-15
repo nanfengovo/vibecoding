@@ -129,12 +129,18 @@ public class AiController : ControllerBase
             var result = await _aiAnalysisService.ChatAsync(
                 new AiChatInput
                 {
+                    UserId = userId,
+                    SessionId = session.Id,
                     Question = request.Question,
                     Symbol = request.Symbol ?? string.Empty,
                     Focus = request.Focus ?? string.Empty,
                     SkillId = request.SkillId ?? string.Empty,
                     ProviderId = request.ProviderId ?? string.Empty,
                     Model = request.Model ?? string.Empty,
+                    ExecutionMode = request.ExecutionMode ?? string.Empty,
+                    ToolPolicy = request.ToolPolicy ?? string.Empty,
+                    MemoryProfile = request.MemoryProfile ?? string.Empty,
+                    AllowToolCategories = request.AllowToolCategories ?? Array.Empty<string>(),
                     ConversationContext = conversationContext,
                     MemoryContext = memoryContext,
                     KnowledgeContext = knowledgeContext,
@@ -179,7 +185,11 @@ public class AiController : ControllerBase
                 GeneratedAt = result.GeneratedAt,
                 MarketContext = result.MarketContext,
                 SessionId = session.Id,
-                References = result.References
+                References = result.References,
+                Orchestrator = result.Orchestrator,
+                FallbackApplied = result.FallbackApplied,
+                ShadowCompared = result.ShadowCompared,
+                ToolTracePublic = result.ToolTracePublic
             });
         }
         catch (InvalidOperationException ex)
@@ -734,6 +744,10 @@ public sealed class AiChatRequest
     public long? SessionId { get; set; }
     public long? KnowledgeBaseId { get; set; }
     public bool? UseMemory { get; set; }
+    public string? ExecutionMode { get; set; }
+    public string? ToolPolicy { get; set; }
+    public string? MemoryProfile { get; set; }
+    public string[]? AllowToolCategories { get; set; }
     public AiReaderContextRequest? ReaderContext { get; set; }
 }
 

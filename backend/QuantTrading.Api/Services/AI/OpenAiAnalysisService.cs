@@ -10,7 +10,7 @@ using QuantTrading.Api.Services.LongBridge;
 
 namespace QuantTrading.Api.Services.AI;
 
-public sealed class OpenAiAnalysisService : IAiAnalysisService
+public sealed class OpenAiAnalysisService : ILegacyAiAnalysisEngine
 {
     private const string MaskedValue = "******";
     private const int RealtimeStaleThresholdSeconds = 25 * 60;

@@ -247,6 +247,31 @@ OpenAI__Enabled=true
 OpenAI__ApiKey=<你的模型 API Key>
 OpenAI__BaseUrl=<模型 OpenAI 兼容地址>
 OpenAI__Model=<默认模型名称>
+Ai__Orchestrator__DefaultMode=legacy
+Ai__Orchestrator__DefaultToolPolicy=auto
+Ai__Orchestrator__McpToolExecutionEnabled=false
+Ai__Trace__ExposePublicTrace=false
+Ai__Trace__AuditTraceEnabled=false
+```
+
+### Agent Orchestrator 灰度建议
+
+- 默认模式保持 `legacy`
+- 阶段 A：改为 `shadow` 观察 24h
+- 阶段 B：改为 `fallback` 小流量到全量
+- 阶段 C：稳定后再评估 `maf`
+
+### pgvector 注意事项（Railway）
+
+应用启动只会做扩展/表结构幂等初始化，不会创建 HNSW 索引。  
+向量索引请在低峰期手工执行：
+
+```bash
+# 1) 先执行 schema（可重复）
+psql \"$DATABASE_URL\" -f scripts/db/vector_schema.sql
+
+# 2) 再执行 HNSW 索引（不要放事务、一次一个）
+psql \"$DATABASE_URL\" -f scripts/db/vector_indexes_hnsw.sql
 ```
 
 部署完成后，把 Vercel 前端的 `BACKEND_API_BASE_URL`、`VITE_API_BASE_URL` 和 `VITE_SIGNALR_BASE_URL` 更新为公网后端域名，然后重新部署前端：

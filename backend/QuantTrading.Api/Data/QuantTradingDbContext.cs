@@ -28,6 +28,7 @@ public class QuantTradingDbContext : DbContext
     public DbSet<AiChatSessionRecord> AiChatSessions { get; set; } = null!;
     public DbSet<AiChatMessageRecord> AiChatMessages { get; set; } = null!;
     public DbSet<AiMemoryRecord> AiMemories { get; set; } = null!;
+    public DbSet<AiToolTraceAuditRecord> AiToolTraceAudits { get; set; } = null!;
     public DbSet<CrawlerSource> CrawlerSources { get; set; } = null!;
     public DbSet<CrawlerJob> CrawlerJobs { get; set; } = null!;
     public DbSet<CrawlerDocument> CrawlerDocuments { get; set; } = null!;
@@ -113,6 +114,12 @@ public class QuantTradingDbContext : DbContext
 
         modelBuilder.Entity<AiMemoryRecord>()
             .HasIndex(m => new { m.UserId, m.KnowledgeDocumentId, m.UpdatedAt });
+
+        modelBuilder.Entity<AiToolTraceAuditRecord>()
+            .HasIndex(item => new { item.UserId, item.CreatedAt });
+
+        modelBuilder.Entity<AiToolTraceAuditRecord>()
+            .HasIndex(item => new { item.SessionId, item.CreatedAt });
 
         modelBuilder.Entity<CrawlerSource>()
             .HasIndex(s => new { s.UserId, s.IsEnabled });

@@ -170,6 +170,7 @@ public sealed class KnowledgeBasesController : ControllerBase
             var result = await _aiAnalysisService.ChatAsync(
                 new AiChatInput
                 {
+                    UserId = userId,
                     Question = request.Question,
                     ProviderId = request.ProviderId,
                     Model = request.Model,
