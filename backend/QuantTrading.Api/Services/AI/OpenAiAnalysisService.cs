@@ -254,7 +254,7 @@ public sealed class OpenAiAnalysisService : ILegacyAiAnalysisEngine
 
         var systemPrompt = marketSensitive
             ? "你是专业交易助手。必须仅基于用户给定的实时行情上下文回答，不得引用训练记忆中的历史价格。若上下文不足，明确说明无法判断。"
-            : "你是专业交易助手。请给出结构化、简洁、可执行的中文回答，并包含风险提示。";
+            : "你是专业交易助手。请给出结构化、简洁、可执行的中文回答，并包含风险提示。系统已提供会话上下文/记忆/知识/工具结果时，不得声称“无法访问历史会话或工具接口”。";
         var userPrompt = BuildChatPrompt(input, question, marketContext);
 
         var modelOverride = (input.Model ?? string.Empty).Trim();
@@ -976,6 +976,8 @@ public sealed class OpenAiAnalysisService : ILegacyAiAnalysisEngine
         AiChatMarketContext? marketContext)
     {
         var sb = new StringBuilder();
+        sb.AppendLine("系统提示：以下“最近会话上下文/用户长期记忆/知识库片段/工具结果”均为后端提供的可信上下文。除非这些段落为空，不要回答“我无法访问历史记录或工具”。");
+        sb.AppendLine();
         if (!string.IsNullOrWhiteSpace(input.SkillId)
             && SkillPrompts.TryGetValue(input.SkillId.Trim(), out var skillPrompt)
             && !string.IsNullOrWhiteSpace(skillPrompt))

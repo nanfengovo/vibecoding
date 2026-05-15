@@ -40,8 +40,8 @@ public sealed class AiOrchestratorConfigProvider : IAiOrchestratorConfigProvider
             false);
 
         var exposePublicTrace = ParseBool(
-            GetValue(map, "ExposePublicTrace", _configuration["Ai:Trace:ExposePublicTrace"], "false"),
-            false);
+            GetValue(map, "ExposePublicTrace", _configuration["Ai:Trace:ExposePublicTrace"], "true"),
+            true);
 
         var auditTraceEnabled = ParseBool(
             GetValue(map, "AuditTraceEnabled", _configuration["Ai:Trace:AuditTraceEnabled"], "false"),
@@ -62,7 +62,7 @@ public sealed class AiOrchestratorConfigProvider : IAiOrchestratorConfigProvider
         var categoriesRaw = GetValue(
             map,
             "AllowedToolCategories",
-            _configuration["Ai:Orchestrator:AllowedToolCategories"],
+            _configuration["Ai:Mcp:AllowedToolCategories"] ?? _configuration["Ai:Orchestrator:AllowedToolCategories"],
             "market,research,account-readonly");
 
         var categories = categoriesRaw

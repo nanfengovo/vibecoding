@@ -8,6 +8,7 @@ public static class AiExecutionModes
     public const string Shadow = "shadow";
     public const string Fallback = "fallback";
     public const string Maf = "maf";
+    public const string Hybrid = "hybrid";
 
     public static string Normalize(string? value, string fallback = Legacy)
     {
@@ -17,6 +18,7 @@ public static class AiExecutionModes
             Shadow => Shadow,
             Fallback => Fallback,
             Maf => Maf,
+            Hybrid => Fallback,
             Legacy => Legacy,
             _ => fallback
         };
