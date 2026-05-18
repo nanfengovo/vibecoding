@@ -20,11 +20,10 @@ ENV TZ=Asia/Shanghai
 COPY --from=build /app/publish .
 
 # 设置环境变量
-ENV ASPNETCORE_URLS=http://+:5000
 ENV ASPNETCORE_ENVIRONMENT=Production
 
 # 暴露端口
 EXPOSE 5000
 
-# 启动应用
-ENTRYPOINT ["dotnet", "QuantTrading.Api.dll"]
+# 启动应用（兼容 Railway 注入的 PORT）
+ENTRYPOINT ["sh", "-c", "dotnet QuantTrading.Api.dll --urls http://+:${PORT:-5000}"]
