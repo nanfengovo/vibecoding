@@ -32,6 +32,7 @@ public class LongBridgeService : ILongBridgeService
     private static readonly Regex FrontmatterKeyValueRegex = new(@"^(?<key>[A-Za-z0-9_]+):\s*(?<value>.*)$", RegexOptions.Compiled);
     private static readonly Regex MarkdownHeadingRegex = new(@"^#\s+(?<title>.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex PeerNameSymbolRegex = new(@"\((?<symbol>[A-Z0-9\.\-]{2,})\)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex NextDataScriptRegex = new(@"<script id=""__NEXT_DATA__"" type=""application/json"">(?<json>[\s\S]*?)</script>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private const string EastMoneySuggestUrl = "https://searchapi.eastmoney.com/api/suggest/get";
     private const string EastMoneySuggestToken = "D43BF722C8E33BDC906FB84D85E326E8";
     private const string EastMoneyQuoteUrl = "https://push2.eastmoney.com/api/qt/stock/get";
@@ -1300,6 +1301,12 @@ public class LongBridgeService : ILongBridgeService
             }
         }
 
+        var quotePagePeers = await TryFetchIndustryRatingsFromQuotePageAsync(normalized);
+        if (quotePagePeers.Count > industryPeers.Count)
+        {
+            industryPeers = quotePagePeers;
+        }
+
         var valuationPeers = await TryFetchIndustryValuationPeersAsync(normalized);
         if (valuationPeers.Count > industryPeers.Count)
         {
@@ -1849,6 +1856,99 @@ public class LongBridgeService : ILongBridgeService
             _logger.LogDebug(ex, "Failed to parse /v1/quote/industry-valuation-comparison for {Symbol}", normalized);
             return new List<LongBridgeIndustryPeer>();
         }
+    }
+
+    private async Task<List<LongBridgeIndustryPeer>> TryFetchIndustryRatingsFromQuotePageAsync(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return new List<LongBridgeIndustryPeer>();
+        }
+
+        // 英文页面通常包含更完整的同业评分列表，优先尝试 en。
+        var locales = new[] { "en", "zh-CN", "zh-HK" };
+        foreach (var locale in locales)
+        {
+            try
+            {
+                var url = $"https://longbridge.com/{locale}/quote/{Uri.EscapeDataString(normalized)}";
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36");
+                request.Headers.AcceptLanguage.ParseAdd(locale);
+                var response = await client.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var html = await response.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(html))
+                {
+                    continue;
+                }
+
+                var scriptMatch = NextDataScriptRegex.Match(html);
+                if (!scriptMatch.Success)
+                {
+                    continue;
+                }
+
+                var nextDataJson = WebUtility.HtmlDecode(scriptMatch.Groups["json"].Value);
+                if (string.IsNullOrWhiteSpace(nextDataJson))
+                {
+                    continue;
+                }
+
+                var nextData = JObject.Parse(nextDataJson);
+                var pageProps = nextData["props"]?["pageProps"] as JObject;
+                var rows = pageProps?["securityIndustryRatingsList"] as JArray;
+                if (rows == null || rows.Count == 0)
+                {
+                    continue;
+                }
+
+                var peers = new List<LongBridgeIndustryPeer>();
+                foreach (var row in rows)
+                {
+                    var counterId = ReadJsonTokenText(row["counter_id"] ?? row["counterId"]);
+                    var rowSymbol = CounterIdToSymbol(counterId);
+                    var rank = ReadJsonTokenText(row["rank"]);
+                    var name = ReadJsonTokenText(row["name"]);
+                    var multiScores = row["multi_scores"] ?? row["multiScores"];
+
+                    if (string.IsNullOrWhiteSpace(rowSymbol) && string.IsNullOrWhiteSpace(name))
+                    {
+                        continue;
+                    }
+
+                    peers.Add(new LongBridgeIndustryPeer
+                    {
+                        Rank = rank,
+                        Name = name,
+                        Symbol = rowSymbol,
+                        Profit = ReadJsonTokenText(multiScores?["profit_letter"] ?? multiScores?["profitLetter"]),
+                        Growth = ReadJsonTokenText(multiScores?["growth_letter"] ?? multiScores?["growthLetter"]),
+                        Operation = ReadJsonTokenText(multiScores?["operation_letter"] ?? multiScores?["operationLetter"]),
+                        FinancialSafety = ReadJsonTokenText(multiScores?["security_letter"] ?? multiScores?["securityLetter"]),
+                        CashFlow = ReadJsonTokenText(multiScores?["cash_letter"] ?? multiScores?["cashLetter"]),
+                        Rating = ReadJsonTokenText(multiScores?["multi_letter"] ?? multiScores?["multiLetter"])
+                    });
+                }
+
+                if (peers.Count > 0)
+                {
+                    return peers;
+                }
+            }
+            catch
+            {
+                // ignore quote page fallback errors
+            }
+        }
+
+        return new List<LongBridgeIndustryPeer>();
     }
 
     private static JArray? TryResolveIndustryValuationRows(JToken data)
