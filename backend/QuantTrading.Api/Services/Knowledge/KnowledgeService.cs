@@ -25,6 +25,32 @@ public sealed class KnowledgeService : IKnowledgeService
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<KnowledgeBase> EnsureDefaultKnowledgeBaseAsync(int userId, CancellationToken cancellationToken = default)
+    {
+        var existing = await _dbContext.KnowledgeBases
+            .Where(item => item.UserId == userId)
+            .OrderByDescending(item => item.IsDefault)
+            .ThenByDescending(item => item.UpdatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        var kb = new KnowledgeBase
+        {
+            UserId = userId,
+            Name = "默认知识库",
+            Description = "系统自动创建",
+            IsDefault = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+        _dbContext.KnowledgeBases.Add(kb);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return kb;
+    }
+
     public async Task<KnowledgeBase> CreateKnowledgeBaseAsync(int userId, string name, string description, CancellationToken cancellationToken = default)
     {
         var trimmedName = string.IsNullOrWhiteSpace(name) ? "我的知识库" : name.Trim();
@@ -134,6 +160,8 @@ public sealed class KnowledgeService : IKnowledgeService
         var chunks = BuildChunks(userId, knowledgeBaseId, doc.Id, cleanMarkdown);
         _dbContext.KnowledgeChunks.AddRange(chunks);
         await _dbContext.SaveChangesAsync(cancellationToken);
+
+        await SyncKnowledgeDocumentToMemoryAsync(userId, doc, cancellationToken);
         return doc;
     }
 
@@ -196,6 +224,191 @@ public sealed class KnowledgeService : IKnowledgeService
             .ToList();
     }
 
+    public async Task<AiMemoryRecord> SyncMemoryToKnowledgeAsync(
+        int userId,
+        AiMemoryRecord memory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(memory);
+
+        if (memory.UserId != userId)
+        {
+            throw new InvalidOperationException("无权同步该记忆。");
+        }
+
+        var now = DateTime.UtcNow;
+        var markdown = BuildMemoryMarkdown(memory);
+
+        if (string.Equals(memory.SourceType, "knowledge_document", StringComparison.OrdinalIgnoreCase)
+            && memory.KnowledgeDocumentId.HasValue
+            && memory.KnowledgeDocumentId.Value > 0)
+        {
+            var doc = await _dbContext.KnowledgeDocuments
+                .FirstOrDefaultAsync(item =>
+                    item.UserId == userId
+                    && item.Id == memory.KnowledgeDocumentId.Value,
+                    cancellationToken);
+            if (doc != null)
+            {
+                doc.Title = ResolveMemoryDocumentTitle(memory);
+                doc.Markdown = markdown;
+                doc.ContentHash = ComputeHash(markdown);
+                doc.UpdatedAt = now;
+                _dbContext.KnowledgeChunks.RemoveRange(_dbContext.KnowledgeChunks.Where(item => item.DocumentId == doc.Id));
+
+                var chunksForDoc = BuildChunks(userId, doc.KnowledgeBaseId, doc.Id, doc.Markdown);
+                _dbContext.KnowledgeChunks.AddRange(chunksForDoc);
+
+                memory.KnowledgeBaseId = doc.KnowledgeBaseId;
+                memory.SyncStatus = "synced";
+                memory.LastSyncedAt = now;
+                memory.UpdatedAt = now;
+
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                return memory;
+            }
+        }
+
+        var targetKb = await ResolveTargetKnowledgeBaseAsync(userId, memory.KnowledgeBaseId, cancellationToken);
+        var sourceUrl = $"memory://{memory.Id}";
+
+        var document = await _dbContext.KnowledgeDocuments
+            .FirstOrDefaultAsync(item =>
+                item.UserId == userId
+                && item.SourceType == "ai_memory"
+                && item.SourceUrl == sourceUrl,
+                cancellationToken);
+
+        if (document == null)
+        {
+            document = new KnowledgeDocument
+            {
+                UserId = userId,
+                KnowledgeBaseId = targetKb.Id,
+                Title = ResolveMemoryDocumentTitle(memory),
+                SourceType = "ai_memory",
+                SourceUrl = sourceUrl,
+                Markdown = markdown,
+                ContentHash = ComputeHash(markdown),
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.KnowledgeDocuments.Add(document);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        else
+        {
+            document.KnowledgeBaseId = targetKb.Id;
+            document.Title = ResolveMemoryDocumentTitle(memory);
+            document.Markdown = markdown;
+            document.ContentHash = ComputeHash(markdown);
+            document.UpdatedAt = now;
+            _dbContext.KnowledgeChunks.RemoveRange(_dbContext.KnowledgeChunks.Where(item => item.DocumentId == document.Id));
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        var chunks = BuildChunks(userId, document.KnowledgeBaseId, document.Id, document.Markdown);
+        _dbContext.KnowledgeChunks.AddRange(chunks);
+
+        targetKb.UpdatedAt = now;
+        memory.KnowledgeBaseId = document.KnowledgeBaseId;
+        memory.KnowledgeDocumentId = document.Id;
+        memory.SyncStatus = "synced";
+        memory.LastSyncedAt = now;
+        memory.UpdatedAt = now;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return memory;
+    }
+
+    public async Task<AiMemoryRecord> SyncKnowledgeDocumentToMemoryAsync(
+        int userId,
+        KnowledgeDocument document,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (document.UserId != userId)
+        {
+            throw new InvalidOperationException("无权同步该知识文档。");
+        }
+
+        var now = DateTime.UtcNow;
+        var sourceRef = $"knowledge:{document.KnowledgeBaseId}:{document.Id}";
+        var sourceUrl = string.IsNullOrWhiteSpace(document.SourceUrl)
+            ? $"knowledge://base/{document.KnowledgeBaseId}/doc/{document.Id}"
+            : document.SourceUrl.Trim();
+
+        var memory = await _dbContext.AiMemories
+            .FirstOrDefaultAsync(item =>
+                item.UserId == userId
+                && item.SourceType == "knowledge_document"
+                && item.SourceRef == sourceRef,
+                cancellationToken);
+
+        var content = BuildKnowledgeMemoryContent(document.Markdown);
+        if (memory == null)
+        {
+            memory = new AiMemoryRecord
+            {
+                UserId = userId,
+                Type = "knowledge_document",
+                Title = $"知识文档：{document.Title}",
+                Content = content,
+                Symbol = string.Empty,
+                Tags = "knowledge,auto",
+                Priority = 2,
+                SourceType = "knowledge_document",
+                SourceUrl = sourceUrl,
+                SourceRef = sourceRef,
+                KnowledgeBaseId = document.KnowledgeBaseId,
+                KnowledgeDocumentId = document.Id,
+                ProviderId = string.Empty,
+                Model = string.Empty,
+                SyncStatus = "synced",
+                LastSyncedAt = now,
+                IsArchived = false,
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _dbContext.AiMemories.Add(memory);
+        }
+        else
+        {
+            memory.Type = string.IsNullOrWhiteSpace(memory.Type) ? "knowledge_document" : memory.Type;
+            memory.Title = $"知识文档：{document.Title}";
+            memory.Content = content;
+            memory.Tags = MergeTags(memory.Tags, "knowledge,auto");
+            memory.SourceUrl = sourceUrl;
+            memory.KnowledgeBaseId = document.KnowledgeBaseId;
+            memory.KnowledgeDocumentId = document.Id;
+            memory.SyncStatus = "synced";
+            memory.LastSyncedAt = now;
+            memory.IsArchived = false;
+            memory.UpdatedAt = now;
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return memory;
+    }
+
+    private async Task<KnowledgeBase> ResolveTargetKnowledgeBaseAsync(
+        int userId,
+        long? knowledgeBaseId,
+        CancellationToken cancellationToken)
+    {
+        if (knowledgeBaseId.HasValue && knowledgeBaseId.Value > 0)
+        {
+            var target = await _dbContext.KnowledgeBases
+                .FirstOrDefaultAsync(item => item.UserId == userId && item.Id == knowledgeBaseId.Value, cancellationToken);
+            if (target != null)
+            {
+                return target;
+            }
+        }
+
+        return await EnsureDefaultKnowledgeBaseAsync(userId, cancellationToken);
+    }
+
     private static List<KnowledgeChunk> BuildChunks(int userId, long knowledgeBaseId, long documentId, string markdown)
     {
         var chunks = new List<KnowledgeChunk>();
@@ -244,6 +457,71 @@ public sealed class KnowledgeService : IKnowledgeService
             });
             buffer.Clear();
         }
+    }
+
+    private static string ResolveMemoryDocumentTitle(AiMemoryRecord memory)
+    {
+        var title = (memory.Title ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            return title.Length <= 280 ? title : title[..280];
+        }
+
+        var type = string.IsNullOrWhiteSpace(memory.Type) ? "memory" : memory.Type.Trim();
+        return $"AI 记忆 {type} {DateTime.UtcNow:yyyy-MM-dd HH:mm}";
+    }
+
+    private static string BuildMemoryMarkdown(AiMemoryRecord memory)
+    {
+        var title = ResolveMemoryDocumentTitle(memory);
+        var sb = new StringBuilder();
+        sb.AppendLine($"# {title}");
+        sb.AppendLine();
+        sb.AppendLine(memory.Content?.Trim() ?? string.Empty);
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine($"- type: {memory.Type}");
+        sb.AppendLine($"- priority: {memory.Priority}");
+        sb.AppendLine($"- tags: {memory.Tags}");
+        sb.AppendLine($"- sourceType: {memory.SourceType}");
+        sb.AppendLine($"- sourceRef: {memory.SourceRef}");
+        sb.AppendLine($"- providerId: {memory.ProviderId}");
+        sb.AppendLine($"- model: {memory.Model}");
+        sb.AppendLine($"- syncedAt: {DateTime.UtcNow:O}");
+        return sb.ToString().Trim();
+    }
+
+    private static string BuildKnowledgeMemoryContent(string markdown)
+    {
+        var clean = Regex.Replace(markdown ?? string.Empty, @"\s+", " ").Trim();
+        if (clean.Length <= 2000)
+        {
+            return clean;
+        }
+
+        return $"{clean[..2000]}...";
+    }
+
+    private static string MergeTags(string existing, string append)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in (existing ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!string.IsNullOrWhiteSpace(part))
+            {
+                set.Add(part);
+            }
+        }
+
+        foreach (var part in (append ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!string.IsNullOrWhiteSpace(part))
+            {
+                set.Add(part);
+            }
+        }
+
+        return string.Join(',', set);
     }
 
     private static int ScoreChunk(KnowledgeChunk chunk, IReadOnlyList<string> tokens)

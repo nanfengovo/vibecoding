@@ -44,5 +44,20 @@ public sealed class LongBridgeCompanyProfile
     public string Name { get; init; } = string.Empty;
     public string Overview { get; init; } = string.Empty;
     public string SourceUrl { get; init; } = string.Empty;
+    public string CurrentIndustry { get; init; } = string.Empty;
+    public List<LongBridgeIndustryPeer> IndustryPeers { get; init; } = new();
     public List<KeyValuePair<string, string>> Fields { get; init; } = new();
+}
+
+public sealed class LongBridgeIndustryPeer
+{
+    public string Rank { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public string Symbol { get; init; } = string.Empty;
+    public string Profit { get; init; } = string.Empty;
+    public string Growth { get; init; } = string.Empty;
+    public string Operation { get; init; } = string.Empty;
+    public string FinancialSafety { get; init; } = string.Empty;
+    public string CashFlow { get; init; } = string.Empty;
+    public string Rating { get; init; } = string.Empty;
 }

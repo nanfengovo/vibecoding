@@ -71,27 +71,29 @@
 
             <div class="review-section">
               <h3>当日交易</h3>
-              <el-table :data="selectedReview.trades" style="width: 100%">
-                <el-table-column prop="symbol" label="股票" width="100" />
-                <el-table-column prop="side" label="方向" width="80">
-                  <template #default="{ row }">
-                    <el-tag :type="row.side === 'buy' ? 'success' : 'danger'" size="small">
-                      {{ row.side === 'buy' ? '买入' : '卖出' }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="quantity" label="数量" width="80" />
-                <el-table-column prop="price" label="价格" width="100">
-                  <template #default="{ row }">
-                    ${{ row.price.toFixed(2) }}
-                  </template>
-                </el-table-column>
-                <el-table-column prop="amount" label="金额">
-                  <template #default="{ row }">
-                    ${{ row.amount.toFixed(2) }}
-                  </template>
-                </el-table-column>
-              </el-table>
+              <div class="glass-list-view">
+                <div class="gl-header">
+                  <div class="gl-col" style="width: 100px">股票</div>
+                  <div class="gl-col" style="width: 80px">方向</div>
+                  <div class="gl-col" style="width: 80px; text-align: right">数量</div>
+                  <div class="gl-col" style="width: 100px; text-align: right">价格</div>
+                  <div class="gl-col" style="flex: 1; text-align: right">金额</div>
+                </div>
+                <div class="gl-body" v-if="selectedReview.trades?.length">
+                  <div v-for="(row, idx) in selectedReview.trades" :key="idx" class="gl-row">
+                    <div class="gl-col" style="width: 100px">{{ row.symbol }}</div>
+                    <div class="gl-col" style="width: 80px">
+                      <span :class="row.side === 'buy' ? 'price-up' : 'price-down'">
+                        {{ row.side === 'buy' ? '买入' : '卖出' }}
+                      </span>
+                    </div>
+                    <div class="gl-col number-font" style="width: 80px; text-align: right">{{ row.quantity }}</div>
+                    <div class="gl-col number-font" style="width: 100px; text-align: right">${{ row.price.toFixed(2) }}</div>
+                    <div class="gl-col number-font" style="flex: 1; text-align: right">${{ row.amount.toFixed(2) }}</div>
+                  </div>
+                </div>
+                <div v-else class="gl-empty">暂无交易记录</div>
+              </div>
             </div>
 
             <div class="review-section">
@@ -441,6 +443,52 @@ onMounted(() => {
 
     p {
       margin-top: 16px;
+    }
+  }
+
+  /* Glass List View */
+  .glass-list-view {
+    background: transparent;
+    border: 1px solid var(--qt-border);
+    border-radius: 8px;
+    overflow: hidden;
+
+    .gl-header {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--qt-border);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--qt-text-secondary);
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .gl-row {
+      display: flex;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--qt-border);
+      font-size: 14px;
+      color: var(--qt-text);
+      transition: all 0.2s ease;
+
+      &:last-child {
+        border-bottom: none;
+      }
+
+      &:hover {
+        background: color-mix(in srgb, #3b82f6 10%, transparent 90%);
+      }
+    }
+
+    .text-muted { color: var(--qt-text-muted); }
+    .number-font { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+    .gl-empty {
+      padding: 40px;
+      text-align: center;
+      color: var(--qt-text-muted);
     }
   }
 }

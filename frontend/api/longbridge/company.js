@@ -134,6 +134,128 @@ function extractTableFields(body) {
   return fields.slice(0, 14)
 }
 
+function extractCurrentIndustry(frontmatter, fields) {
+  const fromFrontmatter = String(frontmatter?.industry || '').trim()
+  if (fromFrontmatter) {
+    return fromFrontmatter
+  }
+
+  const matched = (fields || []).find((item) => {
+    const key = String(item?.key || '').trim().toLowerCase()
+    return key === '行业' || key === 'industry'
+  })
+
+  return String(matched?.value || '').trim()
+}
+
+function parseMarkdownTableRow(line) {
+  const trimmed = String(line || '').trim()
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) {
+    return []
+  }
+
+  return trimmed
+    .slice(1, -1)
+    .split('|')
+    .map((item) => stripMarkdown(item).trim())
+}
+
+function isMarkdownTableSeparatorRow(cells) {
+  return Array.isArray(cells) && cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(String(cell || '').trim()))
+}
+
+function getHeaderIndex(headers, aliases) {
+  const loweredAliases = aliases.map((item) => String(item).toLowerCase())
+  return headers.findIndex((header) => loweredAliases.includes(String(header || '').toLowerCase()))
+}
+
+function readCell(cells, index) {
+  if (!Array.isArray(cells) || index < 0 || index >= cells.length) {
+    return ''
+  }
+
+  return String(cells[index] || '').trim()
+}
+
+function extractPeerSymbolFromName(name) {
+  const matched = String(name || '').match(/\(([A-Z0-9.-]{2,})\)/i)
+  return matched ? String(matched[1] || '').trim().toUpperCase() : ''
+}
+
+function extractIndustryPeers(body) {
+  const lines = String(body || '').split('\n')
+  const sectionStart = lines.findIndex((line) => /^##\s*(同业比较|同行比较|Peer Comparison)/i.test(line.trim()))
+  if (sectionStart < 0) {
+    return []
+  }
+
+  let sectionEnd = lines.length
+  for (let i = sectionStart + 1; i < lines.length; i += 1) {
+    if (/^##\s+/.test(lines[i].trim())) {
+      sectionEnd = i
+      break
+    }
+  }
+
+  const section = lines.slice(sectionStart + 1, sectionEnd)
+  let header = []
+  let rowStart = -1
+  for (let i = 0; i + 1 < section.length; i += 1) {
+    const headerCells = parseMarkdownTableRow(section[i])
+    const separatorCells = parseMarkdownTableRow(section[i + 1])
+    if (headerCells.length === 0 || separatorCells.length === 0) {
+      continue
+    }
+    if (!isMarkdownTableSeparatorRow(separatorCells)) {
+      continue
+    }
+    header = headerCells
+    rowStart = i + 2
+    break
+  }
+
+  if (rowStart < 0 || header.length === 0) {
+    return []
+  }
+
+  const rankIndex = getHeaderIndex(header, ['排名', 'rank'])
+  const nameIndex = getHeaderIndex(header, ['名称', 'name'])
+  const profitIndex = getHeaderIndex(header, ['盈利', 'profit'])
+  const growthIndex = getHeaderIndex(header, ['成长', 'growth'])
+  const operationIndex = getHeaderIndex(header, ['运营', 'operation'])
+  const safetyIndex = getHeaderIndex(header, ['财务安全', '安全', 'security', 'financial safety'])
+  const cashFlowIndex = getHeaderIndex(header, ['现金流', 'cash', 'cash flow'])
+  const ratingIndex = getHeaderIndex(header, ['评级', 'rating'])
+
+  const peers = []
+  for (let i = rowStart; i < section.length; i += 1) {
+    const cells = parseMarkdownTableRow(section[i])
+    if (cells.length === 0 || isMarkdownTableSeparatorRow(cells)) {
+      continue
+    }
+
+    const name = readCell(cells, nameIndex)
+    const symbol = extractPeerSymbolFromName(name)
+    if (!name && !symbol) {
+      continue
+    }
+
+    peers.push({
+      rank: readCell(cells, rankIndex),
+      name,
+      symbol,
+      profit: readCell(cells, profitIndex),
+      growth: readCell(cells, growthIndex),
+      operation: readCell(cells, operationIndex),
+      financialSafety: readCell(cells, safetyIndex),
+      cashFlow: readCell(cells, cashFlowIndex),
+      rating: readCell(cells, ratingIndex)
+    })
+  }
+
+  return peers
+}
+
 async function fetchMarkdown(symbol, locale) {
   const locales = Array.from(new Set([locale, 'zh-CN', 'en']))
   let lastError = null
@@ -183,12 +305,16 @@ export default async function handler(req, res) {
     const title = String(frontmatter?.title || extractHeadingTitle(markdownBody) || symbol).trim()
     const overview = extractOverviewSection(markdownBody)
     const fields = extractTableFields(markdownBody)
+    const currentIndustry = extractCurrentIndustry(frontmatter, fields)
+    const industryPeers = extractIndustryPeers(markdownBody)
 
     return res.status(200).json({
       symbol,
       title,
       overview,
       sourceUrl: url,
+      currentIndustry,
+      industryPeers,
       fields
     })
   } catch (error) {

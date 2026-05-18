@@ -50,15 +50,31 @@ public sealed class StockAnalysisResult
 
 public sealed class AiChatInput
 {
+    public int UserId { get; init; }
+    public long? SessionId { get; init; }
     public string Question { get; init; } = string.Empty;
     public string Symbol { get; init; } = string.Empty;
     public string Focus { get; init; } = string.Empty;
     public string SkillId { get; init; } = string.Empty;
     public string ProviderId { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
+    public string ExecutionMode { get; init; } = string.Empty;
+    public string ToolPolicy { get; init; } = string.Empty;
+    public string MemoryProfile { get; init; } = string.Empty;
+    public IReadOnlyList<string> AllowToolCategories { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> ConversationContext { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> MemoryContext { get; init; } = Array.Empty<string>();
     public IReadOnlyList<AiKnowledgeReference> KnowledgeContext { get; init; } = Array.Empty<AiKnowledgeReference>();
+    public AiReaderContext? ReaderContext { get; init; }
+}
+
+public sealed class AiReaderContext
+{
+    public long BookId { get; init; }
+    public string Title { get; init; } = string.Empty;
+    public string Format { get; init; } = string.Empty;
+    public string Locator { get; init; } = string.Empty;
+    public string SelectedText { get; init; } = string.Empty;
 }
 
 public sealed class AiChatResult
@@ -69,6 +85,10 @@ public sealed class AiChatResult
     public AiChatMarketContext? MarketContext { get; init; }
     public long? SessionId { get; init; }
     public List<AiKnowledgeReference> References { get; init; } = new();
+    public string Orchestrator { get; init; } = "legacy";
+    public bool FallbackApplied { get; init; }
+    public bool ShadowCompared { get; init; }
+    public List<AiToolTracePublicItem> ToolTracePublic { get; init; } = new();
 }
 
 public sealed class AiChatMarketContext
@@ -93,12 +113,24 @@ public sealed class AiKnowledgeReference
     public string Snippet { get; init; } = string.Empty;
 }
 
+public sealed class AiToolTracePublicItem
+{
+    public string ToolName { get; init; } = string.Empty;
+    public string Source { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public int LatencyMs { get; init; }
+}
+
 public sealed class AiPromptOptimizeInput
 {
     public string Question { get; init; } = string.Empty;
     public string Symbol { get; init; } = string.Empty;
     public string ProviderId { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
+    public string Scene { get; init; } = string.Empty;
+    public string ContextText { get; init; } = string.Empty;
+    public long? KnowledgeBaseId { get; init; }
+    public AiReaderContext? ReaderContext { get; init; }
 }
 
 public sealed class AiPromptOptimizeResult

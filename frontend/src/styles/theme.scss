@@ -1,0 +1,73 @@
+@use './tokens.scss';
+
+// 此文件专门用来覆盖 Element Plus 以及定义基础的 html/body 色彩体系
+
+html.dark {
+  color-scheme: dark;
+
+  // 覆盖 Element Plus 核心变量
+  --el-bg-color: var(--qt-surface);
+  --el-bg-color-overlay: color-mix(in srgb, var(--qt-surface) 85%, transparent 15%); // 弹窗等独立层
+  --el-bg-color-page: var(--qt-bg);
+  
+  --el-text-color-primary: var(--qt-text);
+  --el-text-color-regular: var(--qt-text-secondary);
+  --el-text-color-secondary: var(--qt-text-muted);
+  
+  --el-border-color: var(--qt-border);
+  --el-border-color-light: var(--qt-border);
+  --el-border-color-lighter: var(--qt-border-strong);
+  
+  --el-fill-color-light: rgba(255, 255, 255, 0.04);
+  --el-fill-color-lighter: rgba(255, 255, 255, 0.02);
+  
+  --el-mask-color: rgba(0, 0, 0, 0.65);
+}
+
+:root {
+  --el-color-primary: var(--qt-primary);
+  --el-color-success: var(--qt-success);
+  --el-color-warning: var(--qt-warning);
+  --el-color-danger: var(--qt-danger);
+  --el-color-info: var(--qt-info);
+
+  // 让 Element Plus 的弹窗支持圆角
+  --el-border-radius-base: var(--qt-radius-md);
+  --el-border-radius-small: var(--qt-radius-sm);
+  --el-border-radius-round: var(--qt-radius-xl);
+}
+
+html,
+body {
+  background-color: var(--qt-bg);
+  color: var(--qt-text);
+  transition: background-color 0.3s ease, color 0.3s ease;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+// 金融涨跌色基础类
+.color-up {
+  color: var(--qt-success) !important;
+}
+
+.color-down {
+  color: var(--qt-danger) !important;
+}
+
+.color-flat {
+  color: var(--qt-text-muted) !important;
+}
+
+// 强制所有 Element Plus 弹出层（如下拉菜单、提示框）支持毛玻璃与发光边框
+.el-popper {
+  backdrop-filter: blur(16px) !important;
+  border: 1px solid var(--qt-border-glow) !important;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4) !important;
+  
+  // 确保箭头颜色同步
+  .el-popper__arrow::before {
+    background: var(--qt-surface) !important;
+    border-color: var(--qt-border-glow) !important;
+  }
+}

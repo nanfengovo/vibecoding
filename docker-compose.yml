@@ -52,6 +52,8 @@ services:
       - Wechat__WebhookUrl=${WECHAT_WEBHOOK_URL:-}
     ports:
       - "${BACKEND_PORT:-15000}:5000"
+    volumes:
+      - backend_storage:/app/storage
     depends_on:
       sqlserver:
         condition: service_healthy
@@ -71,3 +73,4 @@ services:
 
 volumes:
   sqlserver_data:
+  backend_storage:

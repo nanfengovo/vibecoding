@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.IdentityModel.Tokens;
 using Quartz;
 using Serilog;
@@ -15,10 +16,22 @@ using QuantTrading.Api.Services.Crawler;
 using QuantTrading.Api.Services.Knowledge;
 using QuantTrading.Api.Services.Monitor;
 using QuantTrading.Api.Services.Realtime;
+using QuantTrading.Api.Services.Reader;
 using QuantTrading.Api.Jobs;
 using QuantTrading.Api.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
+var readerMaxUploadBytes = ResolveReaderMaxUploadBytes(builder.Configuration);
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = readerMaxUploadBytes;
+});
+
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = readerMaxUploadBytes;
+});
 
 // Configure Serilog
 Log.Logger = new LoggerConfiguration()
@@ -178,9 +191,22 @@ builder.Services.AddScoped<IWechatService, WechatService>();
 builder.Services.AddScoped<IMonitorService, MonitorService>();
 builder.Services.AddScoped<IWatchlistService, WatchlistService>();
 builder.Services.AddScoped<ITradeService, TradeService>();
-builder.Services.AddScoped<IAiAnalysisService, OpenAiAnalysisService>();
+builder.Services.AddScoped<ILegacyAiAnalysisEngine, OpenAiAnalysisService>();
+builder.Services.AddScoped<IAiAnalysisService, AgentGatewayAiAnalysisService>();
+builder.Services.AddScoped<IAgentOrchestrator, AgentOrchestrator>();
+builder.Services.AddScoped<IMcpToolProvider, LongBridgeMcpToolProvider>();
+builder.Services.AddScoped<IAiOrchestratorConfigProvider, AiOrchestratorConfigProvider>();
+builder.Services.AddScoped<IAiToolTraceAuditWriter, AiToolTraceAuditWriter>();
+builder.Services.AddScoped<ISkillPromptComposer, SkillPromptComposer>();
+builder.Services.AddScoped<ISkillPromptModule, CrossMarketSelectionSkillPromptModule>();
+builder.Services.AddScoped<ISkillPromptModule, TechnicalDiagnosisSkillPromptModule>();
+builder.Services.AddScoped<ISkillPromptModule, FinancialResearchSkillPromptModule>();
+builder.Services.AddScoped<ISkillPromptModule, SmartMoneyTrackingSkillPromptModule>();
+builder.Services.AddScoped<ISkillPromptModule, AdvancedOrderSkillPromptModule>();
+builder.Services.AddScoped<ISkillPromptModule, PositionReviewSkillPromptModule>();
 builder.Services.AddScoped<IKnowledgeService, KnowledgeService>();
 builder.Services.AddScoped<ICrawlerService, CrawlerService>();
+builder.Services.AddScoped<IReaderService, ReaderService>();
 builder.Services.AddSingleton<IRealtimePushService, RealtimePushService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IPasswordService, PasswordService>();
@@ -310,4 +336,15 @@ static string ConvertPostgresUrl(string value)
         "SSL Mode=Require",
         "Trust Server Certificate=true"
     });
+}
+
+static long ResolveReaderMaxUploadBytes(IConfiguration configuration)
+{
+    var raw = configuration["Reader:MaxUploadBytes"];
+    if (long.TryParse(raw, out var parsed) && parsed > 0)
+    {
+        return parsed;
+    }
+
+    return 100L * 1024L * 1024L;
 }

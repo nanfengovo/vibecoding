@@ -1033,6 +1033,8 @@ function buildCompanyProfileFallback(symbol: string, nameHint?: string): Company
     symbol: display,
     title: String(nameHint || meta.name || display).trim() || display,
     overview: '暂未获取到公司简介，可稍后重试或检查证券代码与市场后缀。',
+    currentIndustry: '',
+    industryPeers: [],
     fields: [
       { key: '代码', value: normalized || display },
       { key: '市场', value: marketName(normalized.split('.').pop() || 'US') }
@@ -1078,6 +1080,20 @@ async function fetchLongBridgeCompanyProfile(
     title: String(payload?.title || '').trim() || toDisplaySymbol(normalized),
     overview: String(payload?.overview || '').trim(),
     sourceUrl: typeof payload?.sourceUrl === 'string' ? payload.sourceUrl : undefined,
+    currentIndustry: typeof payload?.currentIndustry === 'string' ? payload.currentIndustry.trim() : '',
+    industryPeers: Array.isArray(payload?.industryPeers)
+      ? payload.industryPeers.map((item: any) => ({
+        rank: String(item?.rank || '').trim(),
+        name: String(item?.name || '').trim(),
+        symbol: String(item?.symbol || '').trim().toUpperCase(),
+        profit: String(item?.profit || '').trim(),
+        growth: String(item?.growth || '').trim(),
+        operation: String(item?.operation || '').trim(),
+        financialSafety: String(item?.financialSafety || '').trim(),
+        cashFlow: String(item?.cashFlow || '').trim(),
+        rating: String(item?.rating || '').trim()
+      }))
+      : [],
     fields: Array.isArray(payload?.fields)
       ? payload.fields
         .map((item: any) => ({

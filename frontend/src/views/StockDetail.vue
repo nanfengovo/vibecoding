@@ -130,10 +130,14 @@
           <div class="ai-header">
             <h3>AI 分析</h3>
             <div class="ai-actions">
+              <el-button size="small" :loading="optimizingAiFocus" :disabled="!aiFocus.trim()" @click="optimizeAiFocus">
+                优化提示词
+              </el-button>
               <el-button size="small" :loading="aiLoading" @click="runAiAnalysis">生成分析</el-button>
               <el-button size="small" :icon="CopyDocument" :disabled="!aiResult" @click="copyAiAnalysis">
                 复制
               </el-button>
+              <el-button size="small" :disabled="!aiResult" @click="saveAiResultAsMemory">保存记忆</el-button>
             </div>
           </div>
           <el-input
@@ -170,6 +174,19 @@
               :value="model"
             />
           </el-select>
+          <div class="ai-kb-actions">
+            <el-select v-model="selectedKbId" placeholder="可选：关联知识库" size="small" style="width: 220px">
+              <el-option
+                v-for="kb in knowledgeBases"
+                :key="kb.id"
+                :label="kb.name"
+                :value="kb.id"
+              />
+            </el-select>
+            <el-button size="small" :disabled="!aiResult || !selectedKbId" @click="importAiResultToKnowledge">
+              入知识库
+            </el-button>
+          </div>
           <div class="ai-result">
             <el-skeleton v-if="aiLoading" :rows="6" animated />
             <template v-else-if="aiResult">
@@ -250,9 +267,10 @@ import {
 import VChart from 'vue-echarts'
 import { CopyDocument, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { aiApi, configApi, stockApi } from '@/api'
+import { aiApi, configApi, knowledgeApi, stockApi } from '@/api'
 import { useAppStore } from '@/stores/app'
-import type { AiProviderConfig, Candlestick, Stock, StockAnalysisResult, StockQuote, SystemConfig } from '@/types'
+import type { AiProviderConfig, Candlestick, KnowledgeBase, Stock, StockAnalysisResult, StockQuote } from '@/types'
+import { normalizeAiProviders, parseModelCandidates, resolvePreferredProviderId } from '@/lib/ai/providerModel'
 
 use([
   CanvasRenderer,
@@ -276,11 +294,14 @@ const klinePeriod = ref('D')
 const customRange = ref<Date[]>([])
 const indicators = ref(['MA'])
 const aiLoading = ref(false)
+const optimizingAiFocus = ref(false)
 const aiFocus = ref('')
 const aiResult = ref<StockAnalysisResult | null>(null)
 const aiProviders = ref<AiProviderConfig[]>([])
 const selectedAiProviderId = ref('')
 const selectedAiModel = ref('')
+const knowledgeBases = ref<KnowledgeBase[]>([])
+const selectedKbId = ref<number | null>(null)
 const requestSeed = ref(0)
 
 const tradeForm = ref({
@@ -380,41 +401,6 @@ const aiParsed = computed(() => parseAiMarkdown(aiResult.value?.analysis || ''))
 const aiHtml = computed(() => aiParsed.value.html)
 const aiToc = computed(() => aiParsed.value.toc.filter(item => item.level <= 3))
 
-function normalizeAiProviders(openAi?: SystemConfig['openAi']): AiProviderConfig[] {
-  const rawProviders = Array.isArray(openAi?.providers) ? openAi.providers : []
-  const providers = rawProviders
-    .map((item, index) => ({
-      id: String(item?.id || `provider-${index + 1}`),
-      name: String(item?.name || `模型源 ${index + 1}`),
-      apiKey: String(item?.apiKey || ''),
-      baseUrl: String(item?.baseUrl || '').trim() || 'https://api.openai.com/v1',
-      model: String(item?.model || '').trim() || 'gpt-5-mini'
-    }))
-    .filter((item) => item.id)
-
-  if (providers.length > 0) {
-    return providers
-  }
-
-  return [
-    {
-      id: 'default',
-      name: '默认模型源',
-      apiKey: String(openAi?.apiKey || ''),
-      baseUrl: String(openAi?.baseUrl || '').trim() || 'https://api.openai.com/v1',
-      model: String(openAi?.model || '').trim() || 'gpt-5-mini'
-    }
-  ]
-}
-
-function parseModelCandidates(raw: string): string[] {
-  const list = String(raw || '')
-    .split(/[\n,;|]+/g)
-    .map((item) => item.trim())
-    .filter(Boolean)
-  return Array.from(new Set(list))
-}
-
 const currentAiProvider = computed(() => {
   return aiProviders.value.find((item) => item.id === selectedAiProviderId.value) || aiProviders.value[0] || null
 })
@@ -433,17 +419,25 @@ watch(currentAiProvider, () => {
 async function loadAiProviders() {
   try {
     const config = await configApi.get()
-    const providers = normalizeAiProviders(config?.openAi)
-    aiProviders.value = providers
-    const preferred = String(config?.openAi?.activeProviderId || '').trim()
-    selectedAiProviderId.value = providers.some((item) => item.id === preferred)
-      ? preferred
-      : providers[0]?.id || ''
+    aiProviders.value = normalizeAiProviders(config?.openAi)
+    selectedAiProviderId.value = resolvePreferredProviderId(aiProviders.value, config?.openAi?.activeProviderId)
     selectedAiModel.value = aiModelOptions.value[0] || ''
   } catch {
     aiProviders.value = []
     selectedAiProviderId.value = ''
     selectedAiModel.value = ''
+  }
+}
+
+async function loadKnowledgeBases() {
+  try {
+    knowledgeBases.value = await knowledgeApi.list()
+    if (knowledgeBases.value.length > 0 && !selectedKbId.value) {
+      selectedKbId.value = knowledgeBases.value[0].id
+    }
+  } catch {
+    knowledgeBases.value = []
+    selectedKbId.value = null
   }
 }
 
@@ -733,6 +727,81 @@ async function runAiAnalysis() {
   }
 }
 
+async function optimizeAiFocus() {
+  const focus = String(aiFocus.value || '').trim()
+  if (!focus) {
+    ElMessage.warning('请先输入分析关注点')
+    return
+  }
+  if (optimizingAiFocus.value) {
+    return
+  }
+
+  optimizingAiFocus.value = true
+  try {
+    const result = await aiApi.optimizePrompt({
+      question: focus,
+      symbol: symbol.value,
+      providerId: selectedAiProviderId.value || undefined,
+      model: selectedAiModel.value || undefined,
+      scene: 'stock_analysis'
+    })
+    const optimized = String(result?.optimizedPrompt || '').trim()
+    if (!optimized) {
+      throw new Error('优化结果为空')
+    }
+    aiFocus.value = optimized
+    ElMessage.success('提示词已优化')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || error?.message || '提示词优化失败')
+  } finally {
+    optimizingAiFocus.value = false
+  }
+}
+
+async function saveAiResultAsMemory() {
+  if (!aiResult.value?.analysis?.trim()) {
+    ElMessage.warning('暂无可保存的 AI 分析')
+    return
+  }
+
+  try {
+    await aiApi.createMemory({
+      type: 'stock_analysis',
+      title: `个股分析：${symbol.value}`,
+      content: aiResult.value.analysis.trim(),
+      symbol: symbol.value,
+      tags: 'stock,analysis',
+      priority: 2,
+      sourceType: 'stock_analysis',
+      sourceUrl: `stock://${symbol.value}`,
+      sourceRef: `stock:${symbol.value}:${aiResult.value.generatedAt}`,
+      providerId: selectedAiProviderId.value || undefined,
+      model: selectedAiModel.value || aiResult.value.model || undefined,
+      knowledgeBaseId: selectedKbId.value || undefined
+    })
+    ElMessage.success('已保存到 AI 记忆')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '保存记忆失败')
+  }
+}
+
+async function importAiResultToKnowledge() {
+  if (!aiResult.value?.analysis?.trim() || !selectedKbId.value) {
+    ElMessage.warning('请先生成分析并选择知识库')
+    return
+  }
+
+  const markdown = `# 个股 AI 分析：${symbol.value}\n\n${aiResult.value.analysis}\n\n- 模型：${aiResult.value.model}\n- 生成时间：${aiResult.value.generatedAt}`
+  await knowledgeApi.importMarkdown(selectedKbId.value, {
+    title: `${symbol.value} - AI 分析`,
+    markdown,
+    sourceType: 'stock_analysis',
+    sourceUrl: `stock://${symbol.value}`
+  })
+  ElMessage.success('已导入知识库')
+}
+
 async function toggleWatch() {
   if (isWatched.value) {
     const item = appStore.watchlist.find(w => w.symbol === symbol.value)
@@ -948,6 +1017,7 @@ watch(symbol, () => {
   }
   aiResult.value = null
   loadAiProviders().catch(() => undefined)
+  loadKnowledgeBases().catch(() => undefined)
   refreshData(false)
 }, { immediate: true })
 
@@ -1154,6 +1224,14 @@ watch([klinePeriod, customRange], () => {
     .ai-provider-select {
       width: 100%;
       margin-top: 10px;
+    }
+
+    .ai-kb-actions {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
     }
 
     .ai-result {

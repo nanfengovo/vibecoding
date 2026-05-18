@@ -26,60 +26,58 @@
     />
 
     <el-row :gutter="20" class="stat-cards">
-      <el-col :span="6">
-        <div class="stat-card">
-          <div class="stat-label">今日盈亏</div>
-          <div :class="['stat-value', todayPnl >= 0 ? 'price-up' : 'price-down']">
-            {{ formatCurrency(todayPnl) }}
-          </div>
-          <div :class="['stat-change', todayPnlPercent >= 0 ? 'positive' : 'negative']">
-            <el-icon><component :is="todayPnlPercent >= 0 ? 'CaretTop' : 'CaretBottom'" /></el-icon>
-            {{ Math.abs(todayPnlPercent).toFixed(2) }}%
-          </div>
-        </div>
+      <el-col :span="6" :xs="24" :sm="12" :md="6">
+        <MetricCard
+          title="今日盈亏"
+          :value="formatCurrency(todayPnl)"
+          :change="todayPnlPercent"
+          icon="Money"
+          :valueColor="todayPnl >= 0 ? 'up' : 'down'"
+        />
       </el-col>
-      <el-col :span="6">
-        <div class="stat-card">
-          <div class="stat-label">总资产</div>
-          <div class="stat-value">{{ formatCurrency(totalAssets) }}</div>
-          <div class="stat-change">
-            <span class="stat-subtitle">可用现金: {{ formatCurrency(availableCash) }}</span>
-          </div>
-        </div>
+      <el-col :span="6" :xs="24" :sm="12" :md="6">
+        <MetricCard
+          title="总资产"
+          :value="formatCurrency(totalAssets)"
+          :subtitle="`可用现金: ${formatCurrency(availableCash)}`"
+          icon="Wallet"
+        />
       </el-col>
-      <el-col :span="6">
-        <div class="stat-card">
-          <div class="stat-label">运行中策略</div>
-          <div class="stat-value">{{ activeStrategiesCount }}</div>
-          <div class="stat-change">
-            <span class="stat-subtitle">共 {{ totalStrategiesCount }} 个策略</span>
-          </div>
-        </div>
+      <el-col :span="6" :xs="24" :sm="12" :md="6">
+        <MetricCard
+          title="运行中策略"
+          :value="activeStrategiesCount"
+          :subtitle="`共 ${totalStrategiesCount} 个策略`"
+          icon="Cpu"
+        />
       </el-col>
-      <el-col :span="6">
-        <div class="stat-card">
-          <div class="stat-label">今日交易</div>
-          <div class="stat-value">{{ todayTradesCount }}</div>
-          <div class="stat-change">
-            <span class="stat-subtitle">成交金额: {{ formatCurrency(todayVolume) }}</span>
-          </div>
-        </div>
+      <el-col :span="6" :xs="24" :sm="12" :md="6">
+        <MetricCard
+          title="今日交易"
+          :value="todayTradesCount"
+          :subtitle="`成交金额: ${formatCurrency(todayVolume)}`"
+          icon="DataLine"
+        />
       </el-col>
     </el-row>
 
-    <div class="card watch-board">
+    <div class="fin-terminal-card watch-board">
       <div class="board-header">
         <h3>多股同列（关注列表）</h3>
-        <el-radio-group v-model="boardPeriod" size="small" @change="loadBoardData">
-          <el-radio-button value="1">1分</el-radio-button>
-          <el-radio-button value="5">5分</el-radio-button>
-          <el-radio-button value="15">15分</el-radio-button>
-          <el-radio-button value="60">60分</el-radio-button>
-          <el-radio-button value="D">日K</el-radio-button>
-          <el-radio-button value="W">周K</el-radio-button>
-          <el-radio-button value="M">月K</el-radio-button>
-          <el-radio-button value="Y">年K</el-radio-button>
-        </el-radio-group>
+        <TimeframeTabs
+          v-model="boardPeriod"
+          :options="[
+            { label: '1分', value: '1' },
+            { label: '5分', value: '5' },
+            { label: '15分', value: '15' },
+            { label: '60分', value: '60' },
+            { label: '日K', value: 'D' },
+            { label: '周K', value: 'W' },
+            { label: '月K', value: 'M' },
+            { label: '年K', value: 'Y' }
+          ]"
+          @change="loadBoardData"
+        />
       </div>
 
       <el-skeleton v-if="boardLoading" :rows="6" animated />
@@ -87,96 +85,77 @@
         还没有关注股票，先去“股票监控”添加自选吧。
       </div>
       <div v-else class="board-grid">
-        <div
+        <StockCard
           v-for="item in boardItems"
           :key="item.symbol"
-          class="board-item"
+          :item="item"
           @click="$router.push(`/stock/${item.symbol}`)"
-        >
-          <div class="item-header">
-            <div class="item-title">
-              <div class="symbol">{{ item.symbol }}</div>
-              <div class="name">{{ item.name }}</div>
-            </div>
-            <div class="item-price" :class="item.change >= 0 ? 'price-up' : 'price-down'">
-              {{ item.price.toFixed(2) }}
-            </div>
-          </div>
-          <div class="item-change" :class="item.change >= 0 ? 'price-up' : 'price-down'">
-            {{ item.change >= 0 ? '+' : '' }}{{ item.change.toFixed(2) }}
-            ({{ item.changePercent >= 0 ? '+' : '' }}{{ item.changePercent.toFixed(2) }}%)
-          </div>
-          <div class="mini-chart">
-            <v-chart :option="buildMiniChartOption(item.series)" autoresize />
-          </div>
-          <div class="item-meta">成交量 {{ formatVolume(item.volume) }}</div>
-        </div>
+        />
       </div>
     </div>
 
     <el-row :gutter="20" class="bottom-content">
-      <el-col :span="12">
-        <div class="card">
+      <el-col :span="12" :xs="24" :md="12">
+        <div class="fin-terminal-card">
           <div class="card-header">
             <h3>关注列表</h3>
             <el-button type="primary" link @click="$router.push('/watchlist')">
               查看全部
             </el-button>
           </div>
-          <el-table :data="watchlistData" style="width: 100%" max-height="300">
-            <el-table-column prop="symbol" label="代码" width="110">
-              <template #default="{ row }">
-                <el-link type="primary" @click="$router.push(`/stock/${row.symbol}`)">
-                  {{ row.symbol }}
-                </el-link>
-              </template>
-            </el-table-column>
-            <el-table-column prop="name" label="名称" />
-            <el-table-column prop="current" label="现价" width="100" align="right">
-              <template #default="{ row }">
-                {{ row.current?.toFixed(2) || '-' }}
-              </template>
-            </el-table-column>
-            <el-table-column prop="changePercent" label="涨跌幅" width="100" align="right">
-              <template #default="{ row }">
-                <span :class="(row.changePercent ?? 0) >= 0 ? 'price-up' : 'price-down'">
+          <div class="glass-list-view">
+            <div class="list-header">
+              <div class="col-symbol">代码</div>
+              <div class="col-name">名称</div>
+              <div class="col-price" style="text-align: right">现价</div>
+              <div class="col-change" style="text-align: right">涨跌幅</div>
+            </div>
+            <div class="list-body" v-if="watchlistData.length > 0">
+              <div v-for="row in watchlistData.slice(0, 5)" :key="row.symbol" class="list-row" @click="$router.push(`/stock/${row.symbol}`)">
+                <div class="col-symbol text-blue">{{ row.symbol }}</div>
+                <div class="col-name">{{ row.name }}</div>
+                <div class="col-price number-font" style="text-align: right">{{ row.current?.toFixed(2) || '-' }}</div>
+                <div class="col-change number-font" style="text-align: right" :class="(row.changePercent ?? 0) >= 0 ? 'color-up' : 'color-down'">
                   {{ (row.changePercent ?? 0) >= 0 ? '+' : '' }}{{ (row.changePercent ?? 0).toFixed(2) }}%
-                </span>
-              </template>
-            </el-table-column>
-          </el-table>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty-state">暂无关注</div>
+          </div>
         </div>
       </el-col>
 
-      <el-col :span="12">
-        <div class="card">
+      <el-col :span="12" :xs="24" :md="12">
+        <div class="fin-terminal-card">
           <div class="card-header">
             <h3>最近交易</h3>
             <el-button type="primary" link @click="$router.push('/trades')">
               查看全部
             </el-button>
           </div>
-          <el-table :data="recentTrades" style="width: 100%" max-height="300">
-            <el-table-column prop="symbol" label="代码" width="100" />
-            <el-table-column prop="side" label="方向" width="80">
-              <template #default="{ row }">
-                <el-tag :type="row.side === 'buy' ? 'success' : 'danger'" size="small">
-                  {{ row.side === 'buy' ? '买入' : '卖出' }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="quantity" label="数量" width="80" />
-            <el-table-column prop="price" label="价格" width="100" align="right">
-              <template #default="{ row }">
-                {{ Number(row.price || row.filledPrice || 0).toFixed(2) }}
-              </template>
-            </el-table-column>
-            <el-table-column prop="executedAt" label="时间">
-              <template #default="{ row }">
-                {{ formatDate(row.executedAt || row.filledAt || row.createdAt) }}
-              </template>
-            </el-table-column>
-          </el-table>
+          <div class="glass-list-view">
+            <div class="list-header">
+              <div class="col-symbol">代码</div>
+              <div class="col-side">方向</div>
+              <div class="col-quantity">数量</div>
+              <div class="col-price" style="text-align: right">价格</div>
+              <div class="col-time" style="text-align: right">时间</div>
+            </div>
+            <div class="list-body" v-if="recentTrades.length > 0">
+              <div v-for="row in recentTrades.slice(0, 5)" :key="row.id || row.executedAt" class="list-row">
+                <div class="col-symbol text-blue">{{ row.symbol }}</div>
+                <div class="col-side">
+                  <span class="format-tag" :class="row.side === 'buy' ? 'bg-success' : 'bg-danger'">
+                    {{ row.side === 'buy' ? '买入' : '卖出' }}
+                  </span>
+                </div>
+                <div class="col-quantity number-font">{{ row.quantity }}</div>
+                <div class="col-price number-font" style="text-align: right">{{ Number(row.price || (row as any).filledPrice || 0).toFixed(2) }}</div>
+                <div class="col-time number-font text-muted" style="text-align: right">{{ formatDate(row.executedAt || (row as any).filledAt || row.createdAt) }}</div>
+              </div>
+            </div>
+            <div v-else class="empty-state">暂无交易</div>
+          </div>
         </div>
       </el-col>
     </el-row>
@@ -190,8 +169,10 @@ import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
-import VChart from 'vue-echarts'
 import { Refresh } from '@element-plus/icons-vue'
+import MetricCard from '@/components/dashboard/MetricCard.vue'
+import StockCard from '@/components/dashboard/StockCard.vue'
+import TimeframeTabs from '@/components/dashboard/TimeframeTabs.vue'
 import { stockApi, tradeApi } from '@/api'
 import { shouldUseDemoApi } from '@/api/demo'
 import { useAppStore } from '@/stores/app'
@@ -279,44 +260,11 @@ function normalizeSeries(rows: any[]): number[] {
     .map(([, bucket]) => bucket[bucket.length - 1])
 }
 
-function buildMiniChartOption(series: number[]) {
-  const up = series.length > 1 ? series[series.length - 1] >= series[0] : true
-  return {
-    grid: { left: 0, right: 0, top: 4, bottom: 4 },
-    xAxis: {
-      type: 'category',
-      show: false,
-      data: series.map((_, idx) => idx)
-    },
-    yAxis: { type: 'value', show: false, scale: true },
-    tooltip: { show: false },
-    series: [{
-      type: 'line',
-      data: series,
-      smooth: true,
-      symbol: 'none',
-      lineStyle: {
-        width: 2,
-        color: up ? '#10b981' : '#ef4444'
-      },
-      areaStyle: {
-        color: up ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)'
-      }
-    }]
-  }
-}
+
 
 function formatCurrency(value: number): string {
   const numeric = Number.isFinite(value) ? value : 0
   return `$${numeric.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-}
-
-function formatVolume(value: number): string {
-  if (!value) return '-'
-  if (value >= 1000000000) return `${(value / 1000000000).toFixed(2)}B`
-  if (value >= 1000000) return `${(value / 1000000).toFixed(2)}M`
-  if (value >= 1000) return `${(value / 1000).toFixed(2)}K`
-  return value.toString()
 }
 
 function formatDate(value: string): string {
@@ -426,33 +374,18 @@ onMounted(async () => {
   }
 
   .stat-cards {
-    margin-bottom: 20px;
+    margin-bottom: 24px;
   }
 
-  .stat-subtitle {
-    color: #9ca3af;
-    font-size: 12px;
-  }
-
-  .card {
-    background: var(--qt-card-bg);
-    border-radius: 8px;
-    padding: 20px;
-    border: 1px solid var(--qt-border);
-    margin-bottom: 20px;
-
-    h3 {
-      font-size: 16px;
-      font-weight: 600;
-      margin: 0;
-    }
+  .bottom-content {
+    margin-top: 24px;
   }
 
   .card-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
+    margin-bottom: 16px;
   }
 
   .watch-board {
@@ -461,84 +394,116 @@ onMounted(async () => {
       justify-content: space-between;
       align-items: center;
       gap: 12px;
-      margin-bottom: 16px;
+      margin-bottom: 20px;
       flex-wrap: wrap;
     }
 
     .board-empty {
       color: var(--qt-text-muted);
-      padding: 12px 0;
+      padding: 24px 0;
+      text-align: center;
     }
 
     .board-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 14px;
-    }
-
-    .board-item {
-      border: 1px solid var(--qt-border);
-      background: var(--qt-card-bg);
-      border-radius: 10px;
-      padding: 12px;
-      cursor: pointer;
-      transition: all 0.2s;
-
-      &:hover {
-        border-color: #1a56db;
-        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
-        transform: translateY(-1px);
-      }
-    }
-
-    .item-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 8px;
-    }
-
-    .symbol {
-      font-weight: 700;
-      font-size: 15px;
-    }
-
-    .name {
-      color: var(--qt-text-secondary);
-      font-size: 12px;
-    }
-
-    .item-price {
-      font-weight: 700;
-      font-size: 18px;
-    }
-
-    .item-change {
-      margin-top: 4px;
-      font-size: 13px;
-      font-weight: 500;
-    }
-
-    .mini-chart {
-      height: 90px;
-      margin-top: 8px;
-    }
-
-    .item-meta {
-      margin-top: 6px;
-      color: var(--qt-text-secondary);
-      font-size: 12px;
+      gap: 16px;
     }
   }
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1200px) {
+  .dashboard {
+    .watch-board {
+      .board-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  }
+}
+
+@media (max-width: 768px) {
   .dashboard {
     .watch-board {
       .board-grid {
         grid-template-columns: 1fr;
       }
     }
+    
+    .bottom-content {
+      margin-top: 16px;
+      
+      .el-col {
+        margin-bottom: 16px;
+      }
+    }
+  }
+}
+
+/* Glass List View for Dashboard */
+.glass-list-view {
+  background: transparent;
+  border: 1px solid var(--qt-border);
+  border-radius: 8px;
+  overflow: hidden;
+
+  .list-header {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--qt-text-secondary);
+    background: rgba(0, 0, 0, 0.1);
+  }
+
+  .list-row {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--qt-border);
+    font-size: 13px;
+    color: var(--qt-text);
+    transition: all 0.2s ease;
+    cursor: pointer;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:hover {
+      background: color-mix(in srgb, #3b82f6 8%, transparent 92%);
+    }
+  }
+
+  .col-symbol { flex: 1; font-weight: 500; }
+  .col-name { flex: 1.5; color: var(--qt-text-secondary); }
+  .col-price { width: 80px; }
+  .col-change { width: 90px; }
+  
+  .col-side { width: 60px; }
+  .col-quantity { width: 60px; }
+  .col-time { width: 140px; }
+
+  .text-blue { color: #3b82f6; }
+  .text-muted { color: var(--qt-text-muted); }
+  .number-font { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+  .format-tag {
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #fff;
+    &.bg-success { background: color-mix(in srgb, var(--qt-success) 60%, transparent 40%); }
+    &.bg-danger { background: color-mix(in srgb, var(--qt-danger) 60%, transparent 40%); }
+  }
+
+  .empty-state {
+    padding: 30px;
+    text-align: center;
+    color: var(--qt-text-muted);
+    font-size: 13px;
   }
 }
 </style>
