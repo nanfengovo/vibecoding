@@ -1775,9 +1775,7 @@ public class LongBridgeService : ILongBridgeService
         {
             var json = JObject.Parse(response);
             var data = json["data"] ?? json;
-            var rows = data["list"] as JArray
-                ?? data["items"] as JArray
-                ?? data as JArray;
+            var rows = TryResolveIndustryValuationRows(data);
             if (rows == null || rows.Count == 0)
             {
                 return new List<LongBridgeIndustryPeer>();
@@ -1787,8 +1785,18 @@ public class LongBridgeService : ILongBridgeService
             for (var i = 0; i < rows.Count; i++)
             {
                 var item = rows[i];
-                var itemCounterId = ReadJsonTokenText(item["counter_id"] ?? item["counterId"]);
-                var itemSymbol = NormalizeSymbol(ReadJsonTokenText(item["symbol"]));
+                var itemCounterId = ReadJsonTokenText(
+                    item["counter_id"]
+                    ?? item["counterId"]
+                    ?? item["counterID"]);
+                var itemSymbol = NormalizeSymbol(ReadJsonTokenText(
+                    item["symbol"]
+                    ?? item["ticker"]
+                    ?? item["code"]
+                    ?? item["stock_code"]
+                    ?? item["stockCode"]
+                    ?? item["secu_code"]
+                    ?? item["secuCode"]));
                 if (string.IsNullOrWhiteSpace(itemSymbol) && !string.IsNullOrWhiteSpace(itemCounterId))
                 {
                     itemSymbol = CounterIdToSymbol(itemCounterId);
@@ -1811,12 +1819,26 @@ public class LongBridgeService : ILongBridgeService
                     Rank = (i + 1).ToString(CultureInfo.InvariantCulture),
                     Name = name,
                     Symbol = itemSymbol,
-                    Profit = FormatRatioDisplay(item["pe"]),
-                    Growth = FormatRatioDisplay(item["pb"]),
-                    Operation = FormatCurrencyDisplay(item["eps"], currency),
-                    FinancialSafety = FormatPercentDisplay(item["div_yld"] ?? item["divYld"]),
-                    CashFlow = FormatCurrencyDisplay(item["market_value"] ?? item["marketValue"], currency),
-                    Rating = FormatCurrencyDisplay(item["price_close"] ?? item["priceClose"], currency)
+                    Profit = FormatRatioDisplay(item["pe"] ?? item["pe_ttm"] ?? item["peTtm"]),
+                    Growth = FormatRatioDisplay(item["pb"] ?? item["pb_mrq"] ?? item["pbMrq"]),
+                    Operation = FormatCurrencyDisplay(item["eps"] ?? item["eps_ttm"] ?? item["epsTtm"], currency),
+                    FinancialSafety = FormatPercentDisplay(
+                        item["div_yld"]
+                        ?? item["divYld"]
+                        ?? item["dividend_yield"]
+                        ?? item["dividendYield"]),
+                    CashFlow = FormatCurrencyDisplay(
+                        item["market_value"]
+                        ?? item["marketValue"]
+                        ?? item["market_cap"]
+                        ?? item["marketCap"], currency),
+                    Rating = FormatCurrencyDisplay(
+                        item["price_close"]
+                        ?? item["priceClose"]
+                        ?? item["last_done"]
+                        ?? item["lastDone"]
+                        ?? item["current_price"]
+                        ?? item["currentPrice"], currency)
                 });
             }
 
@@ -1827,6 +1849,40 @@ public class LongBridgeService : ILongBridgeService
             _logger.LogDebug(ex, "Failed to parse /v1/quote/industry-valuation-comparison for {Symbol}", normalized);
             return new List<LongBridgeIndustryPeer>();
         }
+    }
+
+    private static JArray? TryResolveIndustryValuationRows(JToken data)
+    {
+        if (data is JArray directArray)
+        {
+            return directArray;
+        }
+
+        var rows = data["list"] as JArray
+            ?? data["items"] as JArray
+            ?? data["securities"] as JArray
+            ?? data["rows"] as JArray;
+        if (rows != null)
+        {
+            return rows;
+        }
+
+        var nestedItems = data["items"] as JArray;
+        if (nestedItems is { Count: > 0 })
+        {
+            foreach (var item in nestedItems)
+            {
+                var nestedRows = item["list"] as JArray
+                    ?? item["items"] as JArray
+                    ?? item["rows"] as JArray;
+                if (nestedRows is { Count: > 0 })
+                {
+                    return nestedRows;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static void EnsureIndustryRankingField(
@@ -2616,10 +2672,18 @@ public class LongBridgeService : ILongBridgeService
 
         title = title
             .Replace(normalizedSymbol, string.Empty, StringComparison.OrdinalIgnoreCase)
-            .Replace(baseSymbol, string.Empty, StringComparison.OrdinalIgnoreCase)
             .Replace("()", string.Empty, StringComparison.Ordinal)
             .Replace("（）", string.Empty, StringComparison.Ordinal)
             .Trim();
+
+        if (!string.IsNullOrWhiteSpace(baseSymbol))
+        {
+            title = Regex.Replace(
+                title,
+                $@"\b{Regex.Escape(baseSymbol)}\b",
+                string.Empty,
+                RegexOptions.IgnoreCase).Trim();
+        }
 
         title = Regex.Replace(title, @"[\(\[（【].*?[\)\]）】]", string.Empty).Trim();
         title = title.Replace("Longbridge", string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
