@@ -30,7 +30,9 @@ public class LongBridgeService : ILongBridgeService
     private static readonly Regex NumberTokenRegex = new("[-+]?[0-9]+(?:[\\.,][0-9]+)*", RegexOptions.Compiled);
     private static readonly Regex PairNumberRegex = new("([-+]?[0-9]+(?:[\\.,][0-9]+)*)\\s*/\\s*([-+]?[0-9]+(?:[\\.,][0-9]+)*)", RegexOptions.Compiled);
     private static readonly Regex FrontmatterTitleRegex = new(@"^title:\s*""?(?<title>[^""]+)""?\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex FrontmatterIndustryRegex = new(@"^industry:\s*""?(?<industry>[^""]+)""?\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex MarkdownHeadingRegex = new(@"^#\s+(?<title>.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex PeerNameSymbolRegex = new(@"\((?<symbol>[A-Z0-9\.\-]{2,})\)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private const string EastMoneySuggestUrl = "https://searchapi.eastmoney.com/api/suggest/get";
     private const string EastMoneySuggestToken = "D43BF722C8E33BDC906FB84D85E326E8";
     private const string EastMoneyQuoteUrl = "https://push2.eastmoney.com/api/qt/stock/get";
@@ -1217,6 +1219,8 @@ public class LongBridgeService : ILongBridgeService
 
         string overview = $"{stock.Name}（{stock.Symbol}）的实时行情已接入 Longbridge，支持在本页面查看行情、K线、交易与 AI 分析。";
         string sourceUrl = string.Empty;
+        string currentIndustry = string.Empty;
+        var industryPeers = new List<LongBridgeIndustryPeer>();
         var fields = new List<KeyValuePair<string, string>>
         {
             new("代码", stock.Symbol),
@@ -1256,6 +1260,8 @@ public class LongBridgeService : ILongBridgeService
             }
 
             sourceUrl = markdown.SourceUrl;
+            currentIndustry = markdown.Industry;
+            industryPeers = markdown.IndustryPeers;
             foreach (var item in markdown.Fields)
             {
                 if (!string.IsNullOrWhiteSpace(item.Key) && !string.IsNullOrWhiteSpace(item.Value))
@@ -1265,12 +1271,19 @@ public class LongBridgeService : ILongBridgeService
             }
         }
 
+        if (string.IsNullOrWhiteSpace(currentIndustry))
+        {
+            currentIndustry = FindFieldValue(fields, "行业", "Industry");
+        }
+
         var profile = new LongBridgeCompanyProfile
         {
             Symbol = stock.Symbol,
             Name = stock.Name,
             Overview = overview,
             SourceUrl = sourceUrl,
+            CurrentIndustry = currentIndustry,
+            IndustryPeers = industryPeers,
             Fields = fields
                 .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First())
@@ -1510,11 +1523,15 @@ public class LongBridgeService : ILongBridgeService
                 var title = ExtractCompanyTitleFromMarkdown(markdown, normalized);
                 var overview = ExtractCompanyOverviewFromMarkdown(markdown);
                 var fields = ExtractCompanyFieldsFromMarkdown(markdown);
+                var industry = ExtractCompanyIndustryFromMarkdown(markdown, fields);
+                var industryPeers = ExtractIndustryPeersFromMarkdown(markdown);
                 return new MarkdownCompanyProfile
                 {
                     Title = title,
                     Overview = overview,
                     SourceUrl = url,
+                    Industry = industry,
+                    IndustryPeers = industryPeers,
                     Fields = fields
                 };
             }
@@ -1740,6 +1757,200 @@ public class LongBridgeService : ILongBridgeService
         }
 
         return fields;
+    }
+
+    private static string ExtractCompanyIndustryFromMarkdown(string markdown, IReadOnlyCollection<KeyValuePair<string, string>> fields)
+    {
+        if (!string.IsNullOrWhiteSpace(markdown))
+        {
+            var frontmatterMatch = FrontmatterIndustryRegex.Match(markdown);
+            if (frontmatterMatch.Success)
+            {
+                var fromFrontmatter = frontmatterMatch.Groups["industry"].Value.Trim();
+                if (!string.IsNullOrWhiteSpace(fromFrontmatter))
+                {
+                    return fromFrontmatter;
+                }
+            }
+        }
+
+        return FindFieldValue(fields, "行业", "Industry");
+    }
+
+    private static List<LongBridgeIndustryPeer> ExtractIndustryPeersFromMarkdown(string markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return new List<LongBridgeIndustryPeer>();
+        }
+
+        var lines = markdown.Split('\n');
+        var start = Array.FindIndex(lines, line =>
+            Regex.IsMatch(line.Trim(), @"^##\s*(同业比较|同行比较|Peer Comparison)", RegexOptions.IgnoreCase));
+        if (start < 0)
+        {
+            return new List<LongBridgeIndustryPeer>();
+        }
+
+        var end = lines.Length;
+        for (var i = start + 1; i < lines.Length; i++)
+        {
+            if (lines[i].TrimStart().StartsWith("## ", StringComparison.Ordinal))
+            {
+                end = i;
+                break;
+            }
+        }
+
+        var sectionLines = lines[(start + 1)..end];
+        var tableStart = -1;
+        var headerCells = new List<string>();
+        for (var i = 0; i + 1 < sectionLines.Length; i++)
+        {
+            var rowCells = ParseMarkdownTableCells(sectionLines[i]);
+            var separatorCells = ParseMarkdownTableCells(sectionLines[i + 1]);
+            if (rowCells.Count == 0 || separatorCells.Count == 0)
+            {
+                continue;
+            }
+
+            if (!IsMarkdownSeparatorRow(separatorCells))
+            {
+                continue;
+            }
+
+            tableStart = i + 2;
+            headerCells = rowCells;
+            break;
+        }
+
+        if (tableStart < 0 || headerCells.Count == 0)
+        {
+            return new List<LongBridgeIndustryPeer>();
+        }
+
+        var rankIndex = GetColumnIndex(headerCells, "排名", "Rank");
+        var nameIndex = GetColumnIndex(headerCells, "名称", "Name");
+        var profitIndex = GetColumnIndex(headerCells, "盈利", "Profit");
+        var growthIndex = GetColumnIndex(headerCells, "成长", "Growth");
+        var operationIndex = GetColumnIndex(headerCells, "运营", "Operation");
+        var financialSafetyIndex = GetColumnIndex(headerCells, "财务安全", "安全", "Security", "Financial Safety");
+        var cashFlowIndex = GetColumnIndex(headerCells, "现金流", "Cash", "Cash Flow");
+        var ratingIndex = GetColumnIndex(headerCells, "评级", "Rating");
+
+        var peers = new List<LongBridgeIndustryPeer>();
+        for (var i = tableStart; i < sectionLines.Length; i++)
+        {
+            var rowCells = ParseMarkdownTableCells(sectionLines[i]);
+            if (rowCells.Count == 0)
+            {
+                continue;
+            }
+
+            if (IsMarkdownSeparatorRow(rowCells))
+            {
+                continue;
+            }
+
+            var name = ReadCell(rowCells, nameIndex);
+            var rank = ReadCell(rowCells, rankIndex);
+            var symbol = ExtractSymbolFromPeerName(name);
+            if (string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(symbol))
+            {
+                continue;
+            }
+
+            peers.Add(new LongBridgeIndustryPeer
+            {
+                Rank = rank,
+                Name = name,
+                Symbol = symbol,
+                Profit = ReadCell(rowCells, profitIndex),
+                Growth = ReadCell(rowCells, growthIndex),
+                Operation = ReadCell(rowCells, operationIndex),
+                FinancialSafety = ReadCell(rowCells, financialSafetyIndex),
+                CashFlow = ReadCell(rowCells, cashFlowIndex),
+                Rating = ReadCell(rowCells, ratingIndex)
+            });
+        }
+
+        return peers;
+    }
+
+    private static string FindFieldValue(IEnumerable<KeyValuePair<string, string>> fields, params string[] keys)
+    {
+        foreach (var field in fields)
+        {
+            foreach (var key in keys)
+            {
+                if (field.Key.Equals(key, StringComparison.OrdinalIgnoreCase))
+                {
+                    return field.Value.Trim();
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static List<string> ParseMarkdownTableCells(string line)
+    {
+        var trimmed = (line ?? string.Empty).Trim();
+        if (!trimmed.StartsWith('|') || !trimmed.EndsWith('|'))
+        {
+            return new List<string>();
+        }
+
+        return trimmed
+            .Trim('|')
+            .Split('|')
+            .Select(item => item.Trim())
+            .ToList();
+    }
+
+    private static bool IsMarkdownSeparatorRow(IReadOnlyList<string> cells)
+    {
+        return cells.Count > 0 && cells.All(cell => Regex.IsMatch(cell.Trim(), "^:?-{2,}:?$"));
+    }
+
+    private static int GetColumnIndex(IReadOnlyList<string> headers, params string[] aliases)
+    {
+        for (var i = 0; i < headers.Count; i++)
+        {
+            var header = headers[i];
+            if (aliases.Any(alias => header.Equals(alias, StringComparison.OrdinalIgnoreCase)))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string ReadCell(IReadOnlyList<string> cells, int index)
+    {
+        if (index < 0 || index >= cells.Count)
+        {
+            return string.Empty;
+        }
+
+        return Regex.Replace(cells[index], @"[`*_]", string.Empty).Trim();
+    }
+
+    private static string ExtractSymbolFromPeerName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return string.Empty;
+        }
+
+        var match = PeerNameSymbolRegex.Match(name);
+        if (!match.Success)
+        {
+            return string.Empty;
+        }
+
+        return NormalizeSymbol(match.Groups["symbol"].Value);
     }
 
     private static string NormalizeCompanyTitle(string rawTitle, string symbol)
@@ -4327,6 +4538,8 @@ public class LongBridgeService : ILongBridgeService
         public string Title { get; init; } = string.Empty;
         public string Overview { get; init; } = string.Empty;
         public string SourceUrl { get; init; } = string.Empty;
+        public string Industry { get; init; } = string.Empty;
+        public List<LongBridgeIndustryPeer> IndustryPeers { get; init; } = new();
         public List<KeyValuePair<string, string>> Fields { get; init; } = new();
     }
 

@@ -28,10 +28,24 @@ export interface CompanyProfile {
   title: string
   overview: string
   sourceUrl?: string
+  currentIndustry?: string
+  industryPeers?: CompanyProfileIndustryPeer[]
   fields: Array<{
     key: string
     value: string
   }>
+}
+
+export interface CompanyProfileIndustryPeer {
+  rank: string
+  name: string
+  symbol: string
+  profit: string
+  growth: string
+  operation: string
+  financialSafety: string
+  cashFlow: string
+  rating: string
 }
 
 export interface StockQuote {

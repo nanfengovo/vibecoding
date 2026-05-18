@@ -62,6 +62,21 @@ public class StocksController : ControllerBase
             Title = profile.Name,
             Overview = profile.Overview,
             SourceUrl = profile.SourceUrl,
+            CurrentIndustry = profile.CurrentIndustry,
+            IndustryPeers = profile.IndustryPeers
+                .Select(item => new CompanyProfileIndustryPeer
+                {
+                    Rank = item.Rank,
+                    Name = item.Name,
+                    Symbol = item.Symbol,
+                    Profit = item.Profit,
+                    Growth = item.Growth,
+                    Operation = item.Operation,
+                    FinancialSafety = item.FinancialSafety,
+                    CashFlow = item.CashFlow,
+                    Rating = item.Rating
+                })
+                .ToList(),
             Fields = profile.Fields
                 .Select(item => new CompanyProfileField
                 {
@@ -169,6 +184,8 @@ public sealed class CompanyProfileResponse
     public string Title { get; set; } = string.Empty;
     public string Overview { get; set; } = string.Empty;
     public string SourceUrl { get; set; } = string.Empty;
+    public string CurrentIndustry { get; set; } = string.Empty;
+    public List<CompanyProfileIndustryPeer> IndustryPeers { get; set; } = new();
     public List<CompanyProfileField> Fields { get; set; } = new();
 }
 
@@ -176,4 +193,17 @@ public sealed class CompanyProfileField
 {
     public string Key { get; set; } = string.Empty;
     public string Value { get; set; } = string.Empty;
+}
+
+public sealed class CompanyProfileIndustryPeer
+{
+    public string Rank { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Symbol { get; set; } = string.Empty;
+    public string Profit { get; set; } = string.Empty;
+    public string Growth { get; set; } = string.Empty;
+    public string Operation { get; set; } = string.Empty;
+    public string FinancialSafety { get; set; } = string.Empty;
+    public string CashFlow { get; set; } = string.Empty;
+    public string Rating { get; set; } = string.Empty;
 }

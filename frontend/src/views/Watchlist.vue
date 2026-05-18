@@ -261,16 +261,27 @@
               {{ companyProfile.overview || '暂无公司简介。' }}
             </div>
             <div
-              v-if="companyProfile.fields.length > 0"
+              v-if="displayCompanyFields.length > 0"
               class="glass-descriptions company-extra-fields"
             >
               <div
-                v-for="item in companyProfile.fields"
+                v-for="item in displayCompanyFields"
                 :key="`${item.key}-${item.value}`"
                 class="desc-item"
               >
                 <span class="desc-label">{{ item.key }}</span>
-                <span class="desc-value">{{ item.value }}</span>
+                <span class="desc-value">
+                  <el-button
+                    v-if="isIndustryRankingField(item.key)"
+                    link
+                    type="primary"
+                    class="industry-rank-link"
+                    @click="openIndustryPeersDialog"
+                  >
+                    {{ item.value }}
+                  </el-button>
+                  <span v-else>{{ item.value }}</span>
+                </span>
               </div>
             </div>
             <div v-if="companyProfile.sourceUrl" class="company-source">
@@ -282,6 +293,67 @@
         </div>
       </template>
       <el-empty v-else description="暂无可展示的公司信息" :image-size="72" />
+    </el-dialog>
+
+    <el-dialog
+      v-model="showIndustryPeersDialog"
+      width="980px"
+      destroy-on-close
+      :title="`行业同业对比（${companyProfile?.currentIndustry || '-'}）`"
+    >
+      <div class="industry-filter-bar">
+        <el-input
+          v-model="industryPeerKeyword"
+          clearable
+          placeholder="搜索名称 / 代码 / 评级"
+          style="width: 280px"
+        />
+        <el-select
+          v-model="industryPeerRatingFilter"
+          clearable
+          placeholder="筛选评级"
+          style="width: 160px"
+        >
+          <el-option
+            v-for="rating in industryPeerRatingOptions"
+            :key="rating"
+            :label="rating"
+            :value="rating"
+          />
+        </el-select>
+      </div>
+
+      <div class="glass-list-view industry-peer-table">
+        <div class="list-header">
+          <div class="col-rank">排名</div>
+          <div class="col-name">名称</div>
+          <div class="col-symbol">代码</div>
+          <div class="col-grade">盈利</div>
+          <div class="col-grade">成长</div>
+          <div class="col-grade">运营</div>
+          <div class="col-grade">财务安全</div>
+          <div class="col-grade">现金流</div>
+          <div class="col-grade">评级</div>
+        </div>
+        <div v-if="filteredIndustryPeers.length > 0" class="list-body">
+          <div
+            v-for="item in filteredIndustryPeers"
+            :key="`${item.rank}-${item.symbol || item.name}`"
+            class="list-row"
+          >
+            <div class="col-rank number-font">{{ item.rank || '-' }}</div>
+            <div class="col-name">{{ item.name || '-' }}</div>
+            <div class="col-symbol number-font text-blue">{{ item.symbol || '-' }}</div>
+            <div class="col-grade">{{ item.profit || '-' }}</div>
+            <div class="col-grade">{{ item.growth || '-' }}</div>
+            <div class="col-grade">{{ item.operation || '-' }}</div>
+            <div class="col-grade">{{ item.financialSafety || '-' }}</div>
+            <div class="col-grade">{{ item.cashFlow || '-' }}</div>
+            <div class="col-grade">{{ item.rating || '-' }}</div>
+          </div>
+        </div>
+        <div v-else class="empty-state">暂无匹配的同业数据</div>
+      </div>
     </el-dialog>
 
     <!-- 添加股票对话框 -->
@@ -387,7 +459,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import { useAppStore } from '@/stores/app'
 import { stockApi, monitorApi } from '@/api'
-import type { CompanyProfile, MonitorCondition, MonitorRule, NotificationChannel, Stock, StockQuote } from '@/types'
+import type { CompanyProfile, CompanyProfileIndustryPeer, MonitorCondition, MonitorRule, NotificationChannel, Stock, StockQuote } from '@/types'
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -397,10 +469,13 @@ const viewMode = ref<'table' | 'card'>('table')
 const showAddDialog = ref(false)
 const showRuleDialog = ref(false)
 const showDetailDialog = ref(false)
+const showIndustryPeersDialog = ref(false)
 const detailLoading = ref(false)
 const selectedStockDetail = ref<Stock | null>(null)
 const companyProfileLoading = ref(false)
 const companyProfile = ref<CompanyProfile | null>(null)
+const industryPeerKeyword = ref('')
+const industryPeerRatingFilter = ref('')
 const adding = ref(false)
 const savingRule = ref(false)
 const monitorRules = ref<MonitorRule[]>([])
@@ -428,6 +503,72 @@ const filteredWatchlist = computed(() => {
     item.symbol.toLowerCase().includes(query) ||
     item.name.toLowerCase().includes(query)
   )
+})
+
+const displayCompanyFields = computed(() => {
+  const profileFields = companyProfile.value?.fields
+  const baseFields = Array.isArray(profileFields)
+    ? profileFields
+      .map(item => ({
+        key: String(item?.key || '').trim(),
+        value: String(item?.value || '').trim()
+      }))
+      .filter(item => item.key && item.value)
+    : []
+
+  const currentIndustry = String(companyProfile.value?.currentIndustry || '').trim()
+  if (!currentIndustry) {
+    return baseFields
+  }
+
+  const hasCurrentIndustryField = baseFields.some(item => item.key === '当前行业')
+  if (!hasCurrentIndustryField) {
+    baseFields.unshift({
+      key: '当前行业',
+      value: currentIndustry
+    })
+  }
+
+  return baseFields
+})
+
+const industryPeerRows = computed<CompanyProfileIndustryPeer[]>(() => {
+  const peers = companyProfile.value?.industryPeers
+  return Array.isArray(peers) ? peers : []
+})
+
+const industryPeerRatingOptions = computed(() => {
+  return Array.from(
+    new Set(
+      industryPeerRows.value
+        .map(item => String(item?.rating || '').trim())
+        .filter(Boolean)
+    )
+  )
+})
+
+const filteredIndustryPeers = computed(() => {
+  const query = industryPeerKeyword.value.trim().toLowerCase()
+  const rating = industryPeerRatingFilter.value.trim().toUpperCase()
+
+  return industryPeerRows.value.filter((item) => {
+    if (rating && String(item?.rating || '').trim().toUpperCase() !== rating) {
+      return false
+    }
+
+    if (!query) {
+      return true
+    }
+
+    return [
+      item.name,
+      item.symbol,
+      item.rank,
+      item.rating
+    ]
+      .map(value => String(value || '').toLowerCase())
+      .some(value => value.includes(query))
+  })
 })
 
 function getQuote(symbol: string): StockQuote | undefined {
@@ -546,6 +687,22 @@ function getDisplayName(row: any): string {
   }
 
   return buildNameFallback(symbol, market)
+}
+
+function isIndustryRankingField(key: string): boolean {
+  const normalized = String(key || '').trim().toLowerCase()
+  return normalized === '行业排名' || normalized === 'industry ranking'
+}
+
+function openIndustryPeersDialog() {
+  if (industryPeerRows.value.length === 0) {
+    ElMessage.warning('暂无同业对比数据')
+    return
+  }
+
+  industryPeerKeyword.value = ''
+  industryPeerRatingFilter.value = ''
+  showIndustryPeersDialog.value = true
 }
 
 function toNumber(value: unknown): number | null {
@@ -742,6 +899,9 @@ async function loadCompanyProfile(symbol: string) {
 function resetCompanyProfile() {
   companyProfileLoading.value = false
   companyProfile.value = null
+  showIndustryPeersDialog.value = false
+  industryPeerKeyword.value = ''
+  industryPeerRatingFilter.value = ''
 }
 
 function handleRowClick(row: any) {
@@ -1027,6 +1187,21 @@ onMounted(async () => {
     font-size: 12px;
   }
 
+  .industry-rank-link {
+    padding: 0;
+    min-height: auto;
+    height: auto;
+    line-height: 1.2;
+  }
+
+  .industry-filter-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+
   /* Glass List View for Watchlist */
   .glass-list-view {
     background: transparent;
@@ -1081,6 +1256,28 @@ onMounted(async () => {
       .col-volume { width: 100px; }
       .col-high { width: 100px; }
       .col-low { width: 100px; }
+    }
+
+    &.industry-peer-table {
+      overflow-x: auto;
+
+      .list-header,
+      .list-row {
+        min-width: 860px;
+      }
+
+      .list-row {
+        cursor: default;
+      }
+
+      .list-row:hover {
+        background: transparent;
+      }
+
+      .col-rank { width: 70px; }
+      .col-name { flex: 1.2; min-width: 180px; }
+      .col-symbol { width: 120px; }
+      .col-grade { width: 85px; text-align: center; }
     }
 
     .col-actions { display: flex; gap: 8px; }
