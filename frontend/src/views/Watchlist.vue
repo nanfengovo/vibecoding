@@ -305,10 +305,11 @@
         <el-input
           v-model="industryPeerKeyword"
           clearable
-          placeholder="搜索名称 / 代码 / 评级"
+          placeholder="搜索名称 / 代码 / 指标"
           style="width: 280px"
         />
         <el-select
+          v-if="industryPeerRatingOptions.length > 0"
           v-model="industryPeerRatingFilter"
           clearable
           placeholder="筛选评级"
@@ -328,12 +329,12 @@
           <div class="col-rank">排名</div>
           <div class="col-name">名称</div>
           <div class="col-symbol">代码</div>
-          <div class="col-grade">盈利</div>
-          <div class="col-grade">成长</div>
-          <div class="col-grade">运营</div>
-          <div class="col-grade">财务安全</div>
-          <div class="col-grade">现金流</div>
-          <div class="col-grade">评级</div>
+          <div class="col-grade">PE</div>
+          <div class="col-grade">PB</div>
+          <div class="col-grade">EPS</div>
+          <div class="col-grade">股息率</div>
+          <div class="col-grade">市值</div>
+          <div class="col-grade">现价</div>
         </div>
         <div v-if="filteredIndustryPeers.length > 0" class="list-body">
           <div
@@ -529,6 +530,20 @@ const displayCompanyFields = computed(() => {
     })
   }
 
+  const hasIndustryRankingField = baseFields.some(item => isIndustryRankingField(item.key))
+  if (!hasIndustryRankingField) {
+    const peerRows = Array.isArray(companyProfile.value?.industryPeers)
+      ? companyProfile.value!.industryPeers
+      : []
+    const ranking = buildIndustryRankingFromPeers(peerRows)
+    if (ranking) {
+      baseFields.unshift({
+        key: '行业排名',
+        value: ranking
+      })
+    }
+  }
+
   return baseFields
 })
 
@@ -542,7 +557,7 @@ const industryPeerRatingOptions = computed(() => {
     new Set(
       industryPeerRows.value
         .map(item => String(item?.rating || '').trim())
-        .filter(Boolean)
+        .filter(value => /^[A-F][+-]?$/i.test(value))
     )
   )
 })
@@ -564,6 +579,11 @@ const filteredIndustryPeers = computed(() => {
       item.name,
       item.symbol,
       item.rank,
+      item.profit,
+      item.growth,
+      item.operation,
+      item.financialSafety,
+      item.cashFlow,
       item.rating
     ]
       .map(value => String(value || '').toLowerCase())
@@ -692,6 +712,21 @@ function getDisplayName(row: any): string {
 function isIndustryRankingField(key: string): boolean {
   const normalized = String(key || '').trim().toLowerCase()
   return normalized === '行业排名' || normalized === 'industry ranking'
+}
+
+function buildIndustryRankingFromPeers(peers: CompanyProfileIndustryPeer[]): string {
+  if (!Array.isArray(peers) || peers.length === 0) {
+    return ''
+  }
+
+  const currentSymbol = normalizeSymbol(selectedStockDetail.value?.symbol || companyProfile.value?.symbol || '')
+  if (!currentSymbol) {
+    return `- / ${peers.length}`
+  }
+
+  const selfPeer = peers.find(item => normalizeSymbol(item?.symbol) === currentSymbol)
+  const rank = String(selfPeer?.rank || '').trim()
+  return rank ? `${rank} / ${peers.length}` : `- / ${peers.length}`
 }
 
 function openIndustryPeersDialog() {
@@ -1263,7 +1298,7 @@ onMounted(async () => {
 
       .list-header,
       .list-row {
-        min-width: 860px;
+        min-width: 1040px;
       }
 
       .list-row {
@@ -1277,7 +1312,7 @@ onMounted(async () => {
       .col-rank { width: 70px; }
       .col-name { flex: 1.2; min-width: 180px; }
       .col-symbol { width: 120px; }
-      .col-grade { width: 85px; text-align: center; }
+      .col-grade { width: 110px; text-align: center; white-space: nowrap; }
     }
 
     .col-actions { display: flex; gap: 8px; }

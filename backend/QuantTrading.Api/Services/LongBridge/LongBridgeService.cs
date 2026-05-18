@@ -29,8 +29,7 @@ public class LongBridgeService : ILongBridgeService
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex NumberTokenRegex = new("[-+]?[0-9]+(?:[\\.,][0-9]+)*", RegexOptions.Compiled);
     private static readonly Regex PairNumberRegex = new("([-+]?[0-9]+(?:[\\.,][0-9]+)*)\\s*/\\s*([-+]?[0-9]+(?:[\\.,][0-9]+)*)", RegexOptions.Compiled);
-    private static readonly Regex FrontmatterTitleRegex = new(@"^title:\s*""?(?<title>[^""]+)""?\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex FrontmatterIndustryRegex = new(@"^industry:\s*""?(?<industry>[^""]+)""?\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex FrontmatterKeyValueRegex = new(@"^(?<key>[A-Za-z0-9_]+):\s*(?<value>.*)$", RegexOptions.Compiled);
     private static readonly Regex MarkdownHeadingRegex = new(@"^#\s+(?<title>.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex PeerNameSymbolRegex = new(@"\((?<symbol>[A-Z0-9\.\-]{2,})\)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private const string EastMoneySuggestUrl = "https://searchapi.eastmoney.com/api/suggest/get";
@@ -1217,7 +1216,8 @@ public class LongBridgeService : ILongBridgeService
             return null;
         }
 
-        string overview = $"{stock.Name}（{stock.Symbol}）的实时行情已接入 Longbridge，支持在本页面查看行情、K线、交易与 AI 分析。";
+        var fallbackOverview = $"{stock.Name}（{stock.Symbol}）的实时行情已接入 Longbridge，支持在本页面查看行情、K线、交易与 AI 分析。";
+        string overview = fallbackOverview;
         string sourceUrl = string.Empty;
         string currentIndustry = string.Empty;
         var industryPeers = new List<LongBridgeIndustryPeer>();
@@ -1254,7 +1254,7 @@ public class LongBridgeService : ILongBridgeService
                 stock.Name = markdown.Title;
             }
 
-            if (!string.IsNullOrWhiteSpace(markdown.Overview))
+            if (HasMeaningfulOverview(markdown.Overview))
             {
                 overview = markdown.Overview;
             }
@@ -1271,10 +1271,57 @@ public class LongBridgeService : ILongBridgeService
             }
         }
 
+        var ratingsSnapshot = await TryFetchStockRatingsSnapshotAsync(normalized);
+        if (ratingsSnapshot != null)
+        {
+            if (string.IsNullOrWhiteSpace(currentIndustry))
+            {
+                currentIndustry = ratingsSnapshot.IndustryName;
+            }
+
+            if (!string.IsNullOrWhiteSpace(ratingsSnapshot.IndustryRankDisplay))
+            {
+                fields.Add(new KeyValuePair<string, string>("行业排名", ratingsSnapshot.IndustryRankDisplay));
+            }
+
+            if (!string.IsNullOrWhiteSpace(ratingsSnapshot.IndustryMedianDisplay))
+            {
+                fields.Add(new KeyValuePair<string, string>("行业中位数", ratingsSnapshot.IndustryMedianDisplay));
+            }
+
+            if (!string.IsNullOrWhiteSpace(ratingsSnapshot.IndustryMeanDisplay))
+            {
+                fields.Add(new KeyValuePair<string, string>("行业均值", ratingsSnapshot.IndustryMeanDisplay));
+            }
+
+            if (!string.IsNullOrWhiteSpace(ratingsSnapshot.MultiLetter))
+            {
+                fields.Add(new KeyValuePair<string, string>("综合评级", ratingsSnapshot.MultiLetter));
+            }
+        }
+
+        var valuationPeers = await TryFetchIndustryValuationPeersAsync(normalized);
+        if (valuationPeers.Count > industryPeers.Count)
+        {
+            industryPeers = valuationPeers;
+        }
+
         if (string.IsNullOrWhiteSpace(currentIndustry))
         {
-            currentIndustry = FindFieldValue(fields, "行业", "Industry");
+            currentIndustry = FindFieldValue(fields, "当前行业", "行业", "Industry");
         }
+
+        if (!string.IsNullOrWhiteSpace(currentIndustry))
+        {
+            fields.Add(new KeyValuePair<string, string>("当前行业", currentIndustry));
+        }
+
+        if (string.IsNullOrWhiteSpace(overview))
+        {
+            overview = fallbackOverview;
+        }
+
+        EnsureIndustryRankingField(fields, industryPeers, normalized);
 
         var profile = new LongBridgeCompanyProfile
         {
@@ -1284,10 +1331,7 @@ public class LongBridgeService : ILongBridgeService
             SourceUrl = sourceUrl,
             CurrentIndustry = currentIndustry,
             IndustryPeers = industryPeers,
-            Fields = fields
-                .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())
-                .ToList()
+            Fields = BuildDisplayFields(fields)
         };
 
         _companyProfileCache[normalized] = new CachedCompanyProfile(DateTime.UtcNow, profile);
@@ -1500,40 +1544,43 @@ public class LongBridgeService : ILongBridgeService
             return null;
         }
 
+        MarkdownCompanyProfile? best = null;
+        var bestScore = int.MinValue;
+
         foreach (var locale in LongbridgeQuotePageLocales)
         {
-            var url = $"https://longbridge.com/{locale}/quote/{Uri.EscapeDataString(normalized)}.md";
             try
             {
-                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
-                using var request = new HttpRequestMessage(HttpMethod.Get, url);
-                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/markdown"));
-                var response = await client.SendAsync(request);
-                if (!response.IsSuccessStatusCode)
+                var mainUrl = $"https://longbridge.com/{locale}/quote/{Uri.EscapeDataString(normalized)}.md";
+                var mainMarkdown = await TryFetchMarkdownByUrlAsync(mainUrl, locale);
+                if (string.IsNullOrWhiteSpace(mainMarkdown))
                 {
                     continue;
                 }
 
-                var markdown = await response.Content.ReadAsStringAsync();
-                if (string.IsNullOrWhiteSpace(markdown))
+                var mainProfile = BuildMarkdownCompanyProfile(mainMarkdown, mainUrl, normalized);
+                if (mainProfile == null)
                 {
                     continue;
                 }
 
-                var title = ExtractCompanyTitleFromMarkdown(markdown, normalized);
-                var overview = ExtractCompanyOverviewFromMarkdown(markdown);
-                var fields = ExtractCompanyFieldsFromMarkdown(markdown);
-                var industry = ExtractCompanyIndustryFromMarkdown(markdown, fields);
-                var industryPeers = ExtractIndustryPeersFromMarkdown(markdown);
-                return new MarkdownCompanyProfile
+                var overviewUrl = $"https://longbridge.com/{locale}/quote/{Uri.EscapeDataString(normalized)}/overview.md";
+                var overviewMarkdown = await TryFetchMarkdownByUrlAsync(overviewUrl, locale);
+                if (!string.IsNullOrWhiteSpace(overviewMarkdown))
                 {
-                    Title = title,
-                    Overview = overview,
-                    SourceUrl = url,
-                    Industry = industry,
-                    IndustryPeers = industryPeers,
-                    Fields = fields
-                };
+                    var overviewProfile = BuildMarkdownCompanyProfile(overviewMarkdown, overviewUrl, normalized);
+                    if (overviewProfile != null)
+                    {
+                        mainProfile = MergeMarkdownCompanyProfiles(mainProfile, overviewProfile);
+                    }
+                }
+
+                var score = ScoreMarkdownCompanyProfile(mainProfile);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = mainProfile;
+                }
             }
             catch
             {
@@ -1541,7 +1588,523 @@ public class LongBridgeService : ILongBridgeService
             }
         }
 
-        return null;
+        return best;
+    }
+
+    private async Task<string?> TryFetchMarkdownByUrlAsync(string url, string locale)
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/markdown"));
+            request.Headers.AcceptLanguage.ParseAdd(locale);
+            var response = await client.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var markdown = await response.Content.ReadAsStringAsync();
+            return string.IsNullOrWhiteSpace(markdown) ? null : markdown;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static MarkdownCompanyProfile? BuildMarkdownCompanyProfile(string markdown, string sourceUrl, string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(markdown))
+        {
+            return null;
+        }
+
+        var document = ParseMarkdownDocument(markdown);
+        var title = ExtractCompanyTitleFromMarkdown(document, symbol);
+        var overview = ExtractCompanyOverviewFromMarkdown(document.Body);
+        var fields = ExtractCompanyFieldsFromMarkdown(document.Body);
+        var industry = ExtractCompanyIndustryFromMarkdown(document, fields);
+        var industryPeers = ExtractIndustryPeersFromMarkdown(document.Body);
+        return new MarkdownCompanyProfile
+        {
+            Title = title,
+            Overview = overview,
+            SourceUrl = sourceUrl,
+            Industry = industry,
+            IndustryPeers = industryPeers,
+            Fields = fields
+        };
+    }
+
+    private static MarkdownCompanyProfile MergeMarkdownCompanyProfiles(MarkdownCompanyProfile primary, MarkdownCompanyProfile fallback)
+    {
+        var mergedFields = primary.Fields
+            .Concat(fallback.Fields)
+            .Where(item => !string.IsNullOrWhiteSpace(item.Key) && !string.IsNullOrWhiteSpace(item.Value))
+            .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+
+        return new MarkdownCompanyProfile
+        {
+            Title = HasMeaningfulCompanyTitle(primary.Title) ? primary.Title : fallback.Title,
+            Overview = HasMeaningfulOverview(primary.Overview) ? primary.Overview : fallback.Overview,
+            SourceUrl = !string.IsNullOrWhiteSpace(primary.SourceUrl) ? primary.SourceUrl : fallback.SourceUrl,
+            Industry = !string.IsNullOrWhiteSpace(primary.Industry) ? primary.Industry : fallback.Industry,
+            IndustryPeers = primary.IndustryPeers.Count >= fallback.IndustryPeers.Count ? primary.IndustryPeers : fallback.IndustryPeers,
+            Fields = mergedFields
+        };
+    }
+
+    private static int ScoreMarkdownCompanyProfile(MarkdownCompanyProfile profile)
+    {
+        var score = 0;
+        if (HasMeaningfulCompanyTitle(profile.Title))
+        {
+            score += 2;
+        }
+
+        if (HasMeaningfulOverview(profile.Overview))
+        {
+            score += 4;
+        }
+
+        if (!string.IsNullOrWhiteSpace(profile.Industry))
+        {
+            score += 2;
+        }
+
+        if (profile.IndustryPeers.Count > 0)
+        {
+            score += 3;
+        }
+
+        if (profile.Fields.Count > 0)
+        {
+            score += 1;
+        }
+
+        return score;
+    }
+
+    private static bool HasMeaningfulCompanyTitle(string? title)
+    {
+        var value = (title ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return !Regex.IsMatch(value, @"^[A-Z0-9\.\-]{2,}$");
+    }
+
+    private async Task<StockRatingsSnapshot?> TryFetchStockRatingsSnapshotAsync(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var counterId = SymbolToCounterId(normalized);
+        if (string.IsNullOrWhiteSpace(counterId))
+        {
+            return null;
+        }
+
+        var response = await SendRequestAsync(
+            $"/v1/quote/ratings?counter_id={Uri.EscapeDataString(counterId)}",
+            HttpMethod.Get);
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        try
+        {
+            var json = JObject.Parse(response);
+            var data = json["data"] ?? json;
+            var industryName = ReadJsonTokenText(data["industry_name"] ?? data["industryName"]);
+            var industryRank = ReadJsonTokenText(data["industry_rank"] ?? data["industryRank"]);
+            var industryTotal = ReadJsonTokenText(data["industry_total"] ?? data["industryTotal"]);
+            var industryMean = ReadJsonTokenText(data["industry_mean_score"] ?? data["industryMeanScore"]);
+            var industryMedian = ReadJsonTokenText(data["industry_median_score"] ?? data["industryMedianScore"]);
+            var multiLetter = ReadJsonTokenText(data["multi_letter"] ?? data["multiLetter"]);
+
+            return new StockRatingsSnapshot
+            {
+                IndustryName = industryName,
+                IndustryRankDisplay = BuildIndustryRankDisplay(industryRank, industryTotal),
+                IndustryMeanDisplay = industryMean,
+                IndustryMedianDisplay = industryMedian,
+                MultiLetter = multiLetter
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to parse /v1/quote/ratings for {Symbol}", normalized);
+            return null;
+        }
+    }
+
+    private async Task<List<LongBridgeIndustryPeer>> TryFetchIndustryValuationPeersAsync(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return new List<LongBridgeIndustryPeer>();
+        }
+
+        var counterId = SymbolToCounterId(normalized);
+        if (string.IsNullOrWhiteSpace(counterId))
+        {
+            return new List<LongBridgeIndustryPeer>();
+        }
+
+        var response = await SendRequestAsync(
+            $"/v1/quote/industry-valuation-comparison?counter_id={Uri.EscapeDataString(counterId)}",
+            HttpMethod.Get);
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return new List<LongBridgeIndustryPeer>();
+        }
+
+        try
+        {
+            var json = JObject.Parse(response);
+            var data = json["data"] ?? json;
+            var rows = data["list"] as JArray
+                ?? data["items"] as JArray
+                ?? data as JArray;
+            if (rows == null || rows.Count == 0)
+            {
+                return new List<LongBridgeIndustryPeer>();
+            }
+
+            var peers = new List<LongBridgeIndustryPeer>();
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var item = rows[i];
+                var itemCounterId = ReadJsonTokenText(item["counter_id"] ?? item["counterId"]);
+                var itemSymbol = NormalizeSymbol(ReadJsonTokenText(item["symbol"]));
+                if (string.IsNullOrWhiteSpace(itemSymbol) && !string.IsNullOrWhiteSpace(itemCounterId))
+                {
+                    itemSymbol = CounterIdToSymbol(itemCounterId);
+                }
+
+                if (string.IsNullOrWhiteSpace(itemSymbol))
+                {
+                    continue;
+                }
+
+                var currency = ReadJsonTokenText(item["currency"]);
+                var name = ReadJsonTokenText(item["name"]);
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    name = itemSymbol;
+                }
+
+                peers.Add(new LongBridgeIndustryPeer
+                {
+                    Rank = (i + 1).ToString(CultureInfo.InvariantCulture),
+                    Name = name,
+                    Symbol = itemSymbol,
+                    Profit = FormatRatioDisplay(item["pe"]),
+                    Growth = FormatRatioDisplay(item["pb"]),
+                    Operation = FormatCurrencyDisplay(item["eps"], currency),
+                    FinancialSafety = FormatPercentDisplay(item["div_yld"] ?? item["divYld"]),
+                    CashFlow = FormatCurrencyDisplay(item["market_value"] ?? item["marketValue"], currency),
+                    Rating = FormatCurrencyDisplay(item["price_close"] ?? item["priceClose"], currency)
+                });
+            }
+
+            return peers;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to parse /v1/quote/industry-valuation-comparison for {Symbol}", normalized);
+            return new List<LongBridgeIndustryPeer>();
+        }
+    }
+
+    private static void EnsureIndustryRankingField(
+        ICollection<KeyValuePair<string, string>> fields,
+        IReadOnlyCollection<LongBridgeIndustryPeer> peers,
+        string symbol)
+    {
+        if (fields.Any(item => IsIndustryRankingFieldKey(item.Key)))
+        {
+            return;
+        }
+
+        if (peers.Count == 0)
+        {
+            return;
+        }
+
+        var normalized = NormalizeSymbol(symbol);
+        var selfPeer = peers.FirstOrDefault(item => SymbolEquals(item.Symbol, normalized));
+        if (selfPeer != null && !string.IsNullOrWhiteSpace(selfPeer.Rank))
+        {
+            fields.Add(new KeyValuePair<string, string>("行业排名", $"{selfPeer.Rank} / {peers.Count}"));
+            return;
+        }
+
+        fields.Add(new KeyValuePair<string, string>("行业排名", $"- / {peers.Count}"));
+    }
+
+    private static bool IsIndustryRankingFieldKey(string key)
+    {
+        var normalized = (key ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized == "行业排名"
+            || normalized == "industry ranking";
+    }
+
+    private static List<KeyValuePair<string, string>> BuildDisplayFields(IEnumerable<KeyValuePair<string, string>> fields)
+    {
+        var deduped = new List<KeyValuePair<string, string>>();
+        foreach (var field in fields)
+        {
+            var normalizedKey = NormalizeCompanyFieldKey(field.Key);
+            var value = (field.Value ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(normalizedKey) || string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            if (IsNoiseCompanyField(normalizedKey, value))
+            {
+                continue;
+            }
+
+            if (deduped.Any(item => item.Key.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            deduped.Add(new KeyValuePair<string, string>(normalizedKey, value));
+        }
+
+        return deduped;
+    }
+
+    private static string NormalizeCompanyFieldKey(string key)
+    {
+        var normalized = (key ?? string.Empty).Trim();
+        return normalized.ToLowerInvariant() switch
+        {
+            "行业" => "当前行业",
+            "industry" => "当前行业",
+            "industry ranking" => "行业排名",
+            "industry median" => "行业中位数",
+            "industry average" => "行业均值",
+            _ => normalized
+        };
+    }
+
+    private static bool IsNoiseCompanyField(string key, string value)
+    {
+        if (value == "-" || value.Equals("undefined", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var preserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "当前行业",
+            "行业排名",
+            "行业中位数",
+            "行业均值",
+            "行业"
+        };
+        if (preserved.Contains(key))
+        {
+            return false;
+        }
+
+        var hiddenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "代码",
+            "名称",
+            "市场",
+            "币种",
+            "现价",
+            "涨跌幅",
+            "开盘",
+            "最高",
+            "最低",
+            "昨收",
+            "成交量",
+            "市值",
+            "市盈率",
+            "每股收益",
+            "股息率",
+            "52周区间",
+            "52周最高",
+            "52周最低",
+            "平均成交量",
+            "行情时间",
+            "Item",
+            "Detail",
+            "Metric",
+            "Indicator",
+            "项目",
+            "指标"
+        };
+        return hiddenKeys.Contains(key);
+    }
+
+    private static string BuildIndustryRankDisplay(string rank, string total)
+    {
+        var rankValue = ParsePositiveIntFromText(rank);
+        var totalValue = ParsePositiveIntFromText(total);
+        if (rankValue > 0 && totalValue > 0)
+        {
+            return $"{rankValue} / {totalValue}";
+        }
+
+        rank = (rank ?? string.Empty).Trim();
+        total = (total ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(rank) && !string.IsNullOrWhiteSpace(total))
+        {
+            return $"{rank} / {total}";
+        }
+
+        return string.Empty;
+    }
+
+    private static int ParsePositiveIntFromText(string value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        if (int.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        {
+            return parsed;
+        }
+
+        var match = Regex.Match(normalized, @"\d+");
+        if (match.Success && int.TryParse(match.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed) && parsed > 0)
+        {
+            return parsed;
+        }
+
+        return 0;
+    }
+
+    private static string ReadJsonTokenText(JToken? token)
+    {
+        if (token == null || token.Type == JTokenType.Null || token.Type == JTokenType.Undefined)
+        {
+            return string.Empty;
+        }
+
+        return token.Type switch
+        {
+            JTokenType.String => token.ToString().Trim(),
+            JTokenType.Integer or JTokenType.Float => Convert.ToString(((JValue)token).Value, CultureInfo.InvariantCulture)?.Trim() ?? string.Empty,
+            JTokenType.Boolean => token.Value<bool>() ? "true" : "false",
+            _ => token.ToString(Formatting.None).Trim().Trim('"')
+        };
+    }
+
+    private static string FormatRatioDisplay(JToken? token)
+    {
+        var raw = ReadJsonTokenText(token);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return "-";
+        }
+
+        return raw.EndsWith('x') ? raw : $"{raw}x";
+    }
+
+    private static string FormatPercentDisplay(JToken? token)
+    {
+        var raw = ReadJsonTokenText(token);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return "-";
+        }
+
+        return raw.EndsWith('%') ? raw : $"{raw}%";
+    }
+
+    private static string FormatCurrencyDisplay(JToken? token, string currency)
+    {
+        var raw = ReadJsonTokenText(token);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return "-";
+        }
+
+        return string.IsNullOrWhiteSpace(currency)
+            ? raw
+            : $"{currency}{raw}";
+    }
+
+    private static string SymbolToCounterId(string symbol)
+    {
+        var normalized = NormalizeSymbol(symbol);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var parts = normalized.Split('.', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+        {
+            return normalized;
+        }
+
+        var code = parts[0];
+        var market = parts[1];
+        if (code.All(char.IsDigit))
+        {
+            code = code.TrimStart('0');
+            if (string.IsNullOrWhiteSpace(code))
+            {
+                code = "0";
+            }
+        }
+
+        return $"ST/{market}/{code}";
+    }
+
+    private static string CounterIdToSymbol(string counterId)
+    {
+        var normalized = (counterId ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var slashParts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (slashParts.Length == 3)
+        {
+            var market = slashParts[1];
+            var code = slashParts[2];
+            if (market == "CN" && code.All(char.IsDigit) && code.Length == 6)
+            {
+                market = code.StartsWith("6", StringComparison.Ordinal)
+                    || code.StartsWith("9", StringComparison.Ordinal)
+                    || code.StartsWith("5", StringComparison.Ordinal)
+                    ? "SH"
+                    : "SZ";
+            }
+
+            return NormalizeSymbol($"{code}.{market}");
+        }
+
+        var dotPattern = Regex.Match(normalized, @"^(?<market>US|HK|SH|SZ|SG|CN)\.(?<code>[A-Z0-9\.\-]+)$");
+        if (dotPattern.Success)
+        {
+            var market = dotPattern.Groups["market"].Value;
+            var code = dotPattern.Groups["code"].Value;
+            return NormalizeSymbol($"{code}.{market}");
+        }
+
+        return NormalizeSymbol(normalized);
     }
 
     private static void ApplySnapshotFieldsFromMarkdown(StockSnapshot snapshot, IEnumerable<KeyValuePair<string, string>> fields)
@@ -1652,30 +2215,83 @@ public class LongBridgeService : ILongBridgeService
         return true;
     }
 
-    private static string ExtractCompanyTitleFromMarkdown(string markdown, string symbol)
+    private static MarkdownDocument ParseMarkdownDocument(string markdown)
     {
         if (string.IsNullOrWhiteSpace(markdown))
         {
-            return symbol;
+            return new MarkdownDocument();
         }
 
-        var titleMatch = FrontmatterTitleRegex.Match(markdown);
-        if (titleMatch.Success)
+        if (!markdown.StartsWith("---\n", StringComparison.Ordinal))
         {
-            var title = NormalizeCompanyTitle(titleMatch.Groups["title"].Value, symbol);
+            return new MarkdownDocument
+            {
+                Body = markdown
+            };
+        }
+
+        var end = markdown.IndexOf("\n---\n", 4, StringComparison.Ordinal);
+        if (end <= 0)
+        {
+            return new MarkdownDocument
+            {
+                Body = markdown
+            };
+        }
+
+        var rawFrontmatter = markdown[4..end];
+        var body = markdown[(end + 5)..];
+        var frontmatter = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in rawFrontmatter.Split('\n'))
+        {
+            var match = FrontmatterKeyValueRegex.Match((line ?? string.Empty).Trim());
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var key = match.Groups["key"].Value.Trim();
+            var value = match.Groups["value"].Value.Trim().Trim('"');
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                frontmatter[key] = value;
+            }
+        }
+
+        return new MarkdownDocument
+        {
+            Frontmatter = frontmatter,
+            Body = body
+        };
+    }
+
+    private static string ExtractCompanyTitleFromMarkdown(MarkdownDocument document, string symbol)
+    {
+        if (document.Frontmatter.TryGetValue("name", out var frontmatterName))
+        {
+            var name = NormalizeCompanyTitle(frontmatterName, symbol);
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+        }
+
+        if (document.Frontmatter.TryGetValue("title", out var frontmatterTitle))
+        {
+            var title = NormalizeCompanyTitle(frontmatterTitle, symbol);
             if (!string.IsNullOrWhiteSpace(title))
             {
                 return title;
             }
         }
 
-        var headingMatch = MarkdownHeadingRegex.Match(markdown);
+        var headingMatch = MarkdownHeadingRegex.Match(document.Body ?? string.Empty);
         if (headingMatch.Success)
         {
-            var title = NormalizeCompanyTitle(headingMatch.Groups["title"].Value, symbol);
-            if (!string.IsNullOrWhiteSpace(title))
+            var headingTitle = NormalizeCompanyTitle(headingMatch.Groups["title"].Value, symbol);
+            if (!string.IsNullOrWhiteSpace(headingTitle))
             {
-                return title;
+                return headingTitle;
             }
         }
 
@@ -1692,7 +2308,12 @@ public class LongBridgeService : ILongBridgeService
         var lines = markdown.Split('\n');
         var start = Array.FindIndex(lines, line =>
             Regex.IsMatch(line.Trim(), @"^##\s*(公司概览|公司概況|公司概况|公司簡介|Company Overview)", RegexOptions.IgnoreCase));
-        var begin = start >= 0 ? start + 1 : 0;
+        if (start < 0)
+        {
+            return string.Empty;
+        }
+
+        var begin = start + 1;
         var end = lines.Length;
         for (var i = begin; i < lines.Length; i++)
         {
@@ -1704,10 +2325,42 @@ public class LongBridgeService : ILongBridgeService
         }
 
         var chunk = string.Join('\n', lines[begin..end]);
-        var plain = Regex.Replace(chunk, @"\|.*\|", string.Empty);
+        var plain = Regex.Replace(chunk, @"\[[^\]]+\]\([^\)]+\)", "$1");
+        plain = Regex.Replace(plain, @"\|.*\|", string.Empty);
         plain = Regex.Replace(plain, @"[`*_>#-]", " ");
         plain = Regex.Replace(plain, @"\s+", " ").Trim();
+        if (plain.StartsWith("Disclaimer", StringComparison.OrdinalIgnoreCase)
+            || plain.StartsWith("免责声明", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
         return plain;
+    }
+
+    private static bool HasMeaningfulOverview(string? overview)
+    {
+        var text = (overview ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        if (text.Length < 30)
+        {
+            return false;
+        }
+
+        if (text.Contains("title:", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("locale:", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("longbridge.com/", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("免责声明", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("Disclaimer", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static List<KeyValuePair<string, string>> ExtractCompanyFieldsFromMarkdown(string markdown)
@@ -1739,6 +2392,7 @@ public class LongBridgeService : ILongBridgeService
 
             var key = Regex.Replace(parts[0], @"[`*_]", string.Empty).Trim();
             var value = Regex.Replace(parts[1], @"[`*_]", string.Empty).Trim();
+            value = Regex.Replace(value, @"\[(?<text>[^\]]+)\]\((?<url>[^\)]+)\)", "${text} (${url})");
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
             {
                 continue;
@@ -1759,22 +2413,18 @@ public class LongBridgeService : ILongBridgeService
         return fields;
     }
 
-    private static string ExtractCompanyIndustryFromMarkdown(string markdown, IReadOnlyCollection<KeyValuePair<string, string>> fields)
+    private static string ExtractCompanyIndustryFromMarkdown(MarkdownDocument document, IReadOnlyCollection<KeyValuePair<string, string>> fields)
     {
-        if (!string.IsNullOrWhiteSpace(markdown))
+        if (document.Frontmatter.TryGetValue("industry", out var frontmatterIndustry))
         {
-            var frontmatterMatch = FrontmatterIndustryRegex.Match(markdown);
-            if (frontmatterMatch.Success)
+            var fromFrontmatter = frontmatterIndustry.Trim();
+            if (!string.IsNullOrWhiteSpace(fromFrontmatter))
             {
-                var fromFrontmatter = frontmatterMatch.Groups["industry"].Value.Trim();
-                if (!string.IsNullOrWhiteSpace(fromFrontmatter))
-                {
-                    return fromFrontmatter;
-                }
+                return fromFrontmatter;
             }
         }
 
-        return FindFieldValue(fields, "行业", "Industry");
+        return FindFieldValue(fields, "行业", "Industry", "当前行业");
     }
 
     private static List<LongBridgeIndustryPeer> ExtractIndustryPeersFromMarkdown(string markdown)
@@ -4541,6 +5191,21 @@ public class LongBridgeService : ILongBridgeService
         public string Industry { get; init; } = string.Empty;
         public List<LongBridgeIndustryPeer> IndustryPeers { get; init; } = new();
         public List<KeyValuePair<string, string>> Fields { get; init; } = new();
+    }
+
+    private sealed class MarkdownDocument
+    {
+        public Dictionary<string, string> Frontmatter { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public string Body { get; init; } = string.Empty;
+    }
+
+    private sealed class StockRatingsSnapshot
+    {
+        public string IndustryName { get; init; } = string.Empty;
+        public string IndustryRankDisplay { get; init; } = string.Empty;
+        public string IndustryMeanDisplay { get; init; } = string.Empty;
+        public string IndustryMedianDisplay { get; init; } = string.Empty;
+        public string MultiLetter { get; init; } = string.Empty;
     }
 
     private sealed record CachedStockSnapshot(DateTime FetchedAtUtc, StockSnapshot Snapshot);
